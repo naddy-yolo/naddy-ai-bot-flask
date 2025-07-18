@@ -19,8 +19,9 @@ def webhook():
         # force=True でContent-Type判定をスキップしてJSON解析
         data = request.get_json(force=True)
 
-        # 受信したJSONをログ出力
-        print("📩 Webhook受信データ:", data)
+        # セキュアログ出力（user_id のみ）
+        user_id = data.get("user_id", "unknown")
+        print(f"📩 Webhook受信: user_id={user_id}")
 
         # 仮レスポンス（後ほどGPTやAPI処理をここに入れる）
         return jsonify({"status": "ok", "message": "Webhook受信しました"}), 200
@@ -30,6 +31,6 @@ def webhook():
         print("❌ エラー:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ローカル開発用サーバー起動
+# ローカル開発用サーバー起動（Renderでは無視される）
 if __name__ == "__main__":
     app.run(debug=True)
