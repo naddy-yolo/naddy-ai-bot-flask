@@ -1,63 +1,40 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 import os
-from dotenv import load_dotenv
-from datetime import date, timedelta
 from utils.caromil import get_anthropometric_data
-
-# .envファイル読み込み（ローカル用）
-load_dotenv()
 
 app = Flask(__name__)
 
-# 動作確認用ルート
-@app.route("/", methods=["GET"])
+@app.route('/')
 def index():
-    return "✅ ナディ式AI Bot Flask サーバー稼働中", 200
+    return "Flask app is running!"
 
-# Webhook受信用ルート
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        # JSONを取得
-        data = request.get_json(force=True)
-
-        # セキュアログ（user_idのみ）
-        user_id = data.get("user_id", "unknown")
-        print(f"📩 Webhook受信: user_id={user_id}")
-
-        return jsonify({
-            "status": "ok",
-            "message": "Webhook受信しました"
-        }), 200
-
-    except Exception as e:
-        print("❌ エラー:", str(e))
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-# テスト用：カロミルの体重・体脂肪データ取得
-@app.route("/test-caromil", methods=["GET"])
+@app.route('/test-caromil', methods=['GET'])
 def test_caromil():
     try:
         access_token = os.getenv("CAROMIL_ACCESS_TOKEN")
-        end_date = date.today().isoformat()
-        start_date = (date.today() - timedelta(days=7)).isoformat()
+        print("🔑 Access token loaded:", access_token)
 
-        result = get_anthropometric_data(access_token, start_date, end_date)
+        if not access_token:
+            raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
 
-        return jsonify({
-            "status": "ok",
-            "data": result
-        }), 200
+        # テスト用の日付（存在するデータ範囲に応じて調整可能）
+        start_date = "2024-07-01"
+        end_date = "2024-07-10"
+
+        print(f"📅 Fetching data from {start_date} to {end_date}")
+
+        result = get_anthropometric_data(
+            access_token=access_token,
+            start_date=start_date,
+            end_date=end_date
+        )
+
+        print("✅ API result:", result)
+        return jsonify({"status": "ok", "result": result})
 
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+        print("❌ Error in /test-caromil:", str(e))
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-# ローカル起動用（Renderでは使われない）
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run(debug=True)
