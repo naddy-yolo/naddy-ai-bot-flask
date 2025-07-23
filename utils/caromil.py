@@ -2,7 +2,7 @@ import os
 import requests
 from dotenv import load_dotenv
 
-# ローカル実行時のみ .env を読み込む（Renderでは不要）
+# ローカル用（Renderでは不要）
 load_dotenv()
 
 def refresh_access_token():
@@ -37,10 +37,9 @@ def refresh_access_token():
         raise Exception(f"トークンの更新に失敗しました: {response.status_code} - {response.text}")
 
 
-def get_anthropometric_data(access_token: str, start_date: str, end_date: str):
+def get_anthropometric_data(access_token: str, start_date: str, end_date: str, unit: str = "day"):
     """
     カロミルAPIから体重・体脂肪データを取得
-    ※ start_date / end_date は 'YYYY/MM/DD' 形式
     """
     url = "https://test-connect.calomeal.com/api/anthropometric"
     headers = {
@@ -48,12 +47,12 @@ def get_anthropometric_data(access_token: str, start_date: str, end_date: str):
         "Authorization": f"Bearer {access_token}"
     }
     body = {
-        "start_date": start_date,       # 例: "2024/07/01"
-        "end_date": end_date,           # 例: "2024/07/10"
-        "unit": "day"                   # "day", "week", "month" のいずれか
+        "start_date": start_date,
+        "end_date": end_date,
+        "unit": unit
     }
 
-    print("📤 カロミルAPIへ送信するbody:", body)
+    print("📤 送信body:", body)
 
     response = requests.post(url, headers=headers, json=body)
 
@@ -66,10 +65,10 @@ def get_anthropometric_data(access_token: str, start_date: str, end_date: str):
         headers["Authorization"] = f"Bearer {new_token}"
         retry_response = requests.post(url, headers=headers, json=body)
         if retry_response.status_code == 200:
-            print("✅ トークン更新後の再取得成功")
+            print("✅ 再取得成功")
             return retry_response.json().get("result")
         else:
             raise Exception(f"再試行失敗: {retry_response.status_code} - {retry_response.text}")
     else:
-        print("❌ APIエラー:", response.status_code, response.text)
+        print(f"❌ APIエラー: {response.status_code} - {response.text}")
         raise Exception(f"APIエラー: {response.status_code} - {response.text}")
