@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request
 import os
+import requests
 from utils.caromil import get_anthropometric_data
 
 app = Flask(__name__)
@@ -8,6 +9,7 @@ app = Flask(__name__)
 def index():
     return "Flask app is running!"
 
+# ✅ 体重・体脂肪データ取得（POST）
 @app.route('/test-caromil', methods=["POST"])
 def test_caromil():
     try:
@@ -15,14 +17,13 @@ def test_caromil():
         if not access_token:
             raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
 
-        # ✅ POSTされたJSONボディを取得
-        body = request.get_json()
-        start_date = body.get("start_date")
-        end_date = body.get("end_date")
-        unit = body.get("unit", "day")
+        data = request.json or {}
+        start_date = data.get("start_date")
+        end_date = data.get("end_date")
+        unit = data.get("unit", "day")
 
         if not start_date or not end_date:
-            raise Exception("start_date と end_date は必須です")
+            raise Exception("start_date, end_date は必須です")
 
         print(f"📅 Fetching data from {start_date} to {end_date} with unit '{unit}'")
 
@@ -39,7 +40,35 @@ def test_caromil():
         print("❌ Error in /test-caromil:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
 
-# ✅ 認証コード取得用エンドポイント
+# ✅ ユーザー基本情報取得（GET）
+@app.route("/test-userinfo", methods=["GET"])
+def test_userinfo():
+    try:
+        access_token = os.getenv("CAROMIL_ACCESS_TOKEN")
+        if not access_token:
+            raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
+
+        url = "https://test-connect.calomeal.com/api/user_info"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(url, headers=headers)
+
+        if response.status_code == 200:
+            return jsonify({"status": "ok", "result": response.json()})
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"ユーザー情報取得失敗: {response.status_code}",
+                "response": response.text
+            }), response.status_code
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+# ✅ 認証コード受け取り
 @app.route("/callback")
 def callback():
     code = request.args.get("code")
