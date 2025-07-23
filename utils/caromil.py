@@ -2,10 +2,13 @@ import os
 import requests
 from dotenv import load_dotenv
 
-# ローカル用（Renderでは不要）
+# ローカル環境用
 load_dotenv()
 
 def refresh_access_token():
+    """
+    refresh_token を使用して新しい access_token を取得
+    """
     url = "https://test-connect.calomeal.com/auth/accesstoken"
     data = {
         "grant_type": "refresh_token",
@@ -19,28 +22,32 @@ def refresh_access_token():
 
     print("🔁 トークンリフレッシュ開始")
     response = requests.post(url, headers=headers, data=data)
-
     if response.status_code == 200:
         tokens = response.json()
-        new_token = tokens.get("access_token")
-        os.environ["CAROMIL_ACCESS_TOKEN"] = new_token
+        access_token = tokens.get("access_token")
         print("✅ アクセストークン更新成功")
-        return new_token
+        os.environ["CAROMIL_ACCESS_TOKEN"] = access_token
+        return access_token
     else:
         print("❌ トークン更新失敗:", response.status_code, response.text)
         raise Exception(f"トークンの更新に失敗しました: {response.status_code} - {response.text}")
 
-def get_anthropometric_data(access_token: str, start_date: str, end_date: str):
+
+def get_anthropometric_data_v2(access_token: str, start_date: str, end_date: str):
+    """
+    /api/v2/anthropometric エンドポイントで体重データ取得（GET形式）
+    """
     url = "https://test-connect.calomeal.com/api/v2/anthropometric"
     headers = {
         "Authorization": f"Bearer {access_token}"
     }
     params = {
-        "from": start_date,  # 例: "2024-07-01"
+        "from": start_date,
         "to": end_date
     }
 
-    print("📤 パラメータ:", params)
+    print("📤 GET送信先:", url)
+    print("📅 パラメータ:", params)
 
     response = requests.get(url, headers=headers, params=params)
 
@@ -48,15 +55,13 @@ def get_anthropometric_data(access_token: str, start_date: str, end_date: str):
         print("✅ データ取得成功")
         return response.json()
     elif response.status_code == 401:
-        print("⚠️ トークン期限切れ。更新を試みます")
+        print("⚠️ トークン無効 → リフレッシュを試みます")
         new_token = refresh_access_token()
         headers["Authorization"] = f"Bearer {new_token}"
         retry_response = requests.get(url, headers=headers, params=params)
         if retry_response.status_code == 200:
-            print("✅ トークン更新後の再取得成功")
             return retry_response.json()
         else:
             raise Exception(f"再試行失敗: {retry_response.status_code} - {retry_response.text}")
     else:
-        print("❌ APIエラー:", response.status_code, response.text)
-        raise Exception(f"APIエラー: {response.status_code} - {response.text}")
+        raise Exception(f"APIエラー: {response.status_code} - {res_
