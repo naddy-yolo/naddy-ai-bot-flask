@@ -15,11 +15,14 @@ def test_caromil():
         if not access_token:
             raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
 
-        # 外部から受け取るJSON（POSTボディ）を処理
-        data = request.get_json(force=True)
-        start_date = data.get("start_date", "2024/07/01")
-        end_date = data.get("end_date", "2024/07/10")
-        unit = data.get("unit", "day")
+        # ✅ POSTされたJSONボディを取得
+        body = request.get_json()
+        start_date = body.get("start_date")
+        end_date = body.get("end_date")
+        unit = body.get("unit", "day")
+
+        if not start_date or not end_date:
+            raise Exception("start_date と end_date は必須です")
 
         print(f"📅 Fetching data from {start_date} to {end_date} with unit '{unit}'")
 
@@ -36,6 +39,7 @@ def test_caromil():
         print("❌ Error in /test-caromil:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
 
+# ✅ 認証コード取得用エンドポイント
 @app.route("/callback")
 def callback():
     code = request.args.get("code")
