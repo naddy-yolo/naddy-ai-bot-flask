@@ -17,9 +17,9 @@ def test_caromil():
         if not access_token:
             raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
 
-        # テスト用の日付
-        start_date = "2024-07-01"
-        end_date = "2024-07-10"
+        # ✅ Calomeal APIは YYYY/MM/DD 形式が必須
+        start_date = "2024/07/01"
+        end_date = "2024/07/10"
         print(f"📅 Fetching data from {start_date} to {end_date}")
 
         result = get_anthropometric_data(
@@ -35,7 +35,7 @@ def test_caromil():
         print("❌ Error in /test-caromil:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ✅ 認証コード取得用エンドポイント（追記部分）
+# ✅ 認証コード取得用エンドポイント
 @app.route("/callback")
 def callback():
     code = request.args.get("code")
