@@ -43,7 +43,6 @@ def get_anthropometric_data(access_token: str, start_date: str, end_date: str, u
     カロミルAPIから体重・体脂肪データを取得
     ※ start_date / end_date は 'YYYY/MM/DD' or 'YYYY-MM-DD' を想定
     """
-
     url = "https://test-connect.calomeal.com/api/anthropometric"
     headers = {
         "Content-Type": "application/json",
