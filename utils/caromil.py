@@ -9,7 +9,7 @@ def refresh_access_token():
     """
     refresh_token を使用して新しい access_token を取得
     """
-    url = "https://connect.calomeal.com/auth/accesstoken"
+    url = "https://test-connect.calomeal.com/auth/accesstoken"
     data = {
         "grant_type": "refresh_token",
         "client_id": os.getenv("CAROMIL_CLIENT_ID"),
@@ -24,7 +24,6 @@ def refresh_access_token():
     if response.status_code == 200:
         tokens = response.json()
         print("✅ アクセストークンを更新しました")
-        # 一時的に環境変数を上書き（必要に応じて保存処理に変更可）
         os.environ["CAROMIL_ACCESS_TOKEN"] = tokens.get("access_token")
         return tokens.get("access_token")
     else:
@@ -33,10 +32,9 @@ def refresh_access_token():
 
 def get_anthropometric_data(access_token: str, start_date: str, end_date: str):
     """
-    カロミルAPIから体重・体脂肪データを取得。
-    トークンが期限切れの場合は自動でリフレッシュして再試行。
+    カロミルAPIから体重・体脂肪データを取得（テスト環境）。
     """
-    url = "https://connect.calomeal.com/api/anthropometric"
+    url = "https://test-connect.calomeal.com/api/anthropometric"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {access_token}"
