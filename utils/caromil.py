@@ -9,7 +9,7 @@ def refresh_access_token():
     """
     refresh_token を使用して新しい access_token を取得
     """
-    url = "https://connect.calomeal.com/auth/accesstoken"
+    url = "https://test-connect.calomeal.com/auth/accesstoken"
     data = {
         "grant_type": "refresh_token",
         "client_id": os.getenv("CAROMIL_CLIENT_ID"),
@@ -42,15 +42,15 @@ def get_anthropometric_data(access_token: str, start_date: str, end_date: str):
     カロミルAPIから体重・体脂肪データを取得
     ※ start_date / end_date は 'YYYY/MM/DD' 形式
     """
-    url = "https://connect.calomeal.com/api/anthropometric"
+    url = "https://test-connect.calomeal.com/api/anthropometric"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {access_token}"
     }
     body = {
-        "start_date": start_date,       # 例: "2024/07/01"
-        "end_date": end_date,           # 例: "2024/07/10"
-        "unit": "day"                   # "day", "week", "month" のいずれか
+        "start_date": start_date,
+        "end_date": end_date,
+        "unit": "day"
     }
 
     print("📤 カロミルAPIへ送信するbody:", body)
