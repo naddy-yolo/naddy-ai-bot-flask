@@ -6,9 +6,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def refresh_access_token():
-    """
-    refresh_token を使用して新しい access_token を取得
-    """
     url = "https://test-connect.calomeal.com/auth/accesstoken"
     data = {
         "grant_type": "refresh_token",
@@ -21,53 +18,43 @@ def refresh_access_token():
     }
 
     print("🔁 トークンリフレッシュ開始")
-    print("🔐 client_id:", os.getenv("CAROMIL_CLIENT_ID"))
-    print("🔐 client_secret:", os.getenv("CAROMIL_CLIENT_SECRET")[:6], "...")
-    print("🔐 refresh_token:", os.getenv("CAROMIL_REFRESH_TOKEN")[:12], "...")
-
     response = requests.post(url, headers=headers, data=data)
+
     if response.status_code == 200:
         tokens = response.json()
-        access_token = tokens.get("access_token")
+        new_token = tokens.get("access_token")
+        os.environ["CAROMIL_ACCESS_TOKEN"] = new_token
         print("✅ アクセストークン更新成功")
-        os.environ["CAROMIL_ACCESS_TOKEN"] = access_token
-        return access_token
+        return new_token
     else:
         print("❌ トークン更新失敗:", response.status_code, response.text)
         raise Exception(f"トークンの更新に失敗しました: {response.status_code} - {response.text}")
 
-
 def get_anthropometric_data(access_token: str, start_date: str, end_date: str):
-    """
-    カロミルAPIから体重・体脂肪データを取得
-    ※ start_date / end_date は 'YYYY/MM/DD' 形式
-    """
-    url = "https://test-connect.calomeal.com/api/anthropometric"
+    url = "https://test-connect.calomeal.com/api/v2/anthropometric"
     headers = {
-        "Content-Type": "application/json",
         "Authorization": f"Bearer {access_token}"
     }
-    body = {
-        "start_date": start_date,
-        "end_date": end_date,
-        "unit": "day"
+    params = {
+        "from": start_date,  # 例: "2024-07-01"
+        "to": end_date
     }
 
-    print("📤 カロミルAPIへ送信するbody:", body)
+    print("📤 パラメータ:", params)
 
-    response = requests.post(url, headers=headers, json=body)
+    response = requests.get(url, headers=headers, params=params)
 
     if response.status_code == 200:
         print("✅ データ取得成功")
-        return response.json().get("result")
+        return response.json()
     elif response.status_code == 401:
         print("⚠️ トークン期限切れ。更新を試みます")
         new_token = refresh_access_token()
         headers["Authorization"] = f"Bearer {new_token}"
-        retry_response = requests.post(url, headers=headers, json=body)
+        retry_response = requests.get(url, headers=headers, params=params)
         if retry_response.status_code == 200:
             print("✅ トークン更新後の再取得成功")
-            return retry_response.json().get("result")
+            return retry_response.json()
         else:
             raise Exception(f"再試行失敗: {retry_response.status_code} - {retry_response.text}")
     else:
