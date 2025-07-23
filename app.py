@@ -8,8 +8,7 @@ app = Flask(__name__)
 def index():
     return "Flask app is running!"
 
-# ✅ GET / POST 両方を許可（curlの挙動に対応）
-@app.route('/test-caromil', methods=['GET', 'POST'])
+@app.route('/test-caromil', methods=["POST"])
 def test_caromil():
     try:
         access_token = os.getenv("CAROMIL_ACCESS_TOKEN")
@@ -19,20 +18,22 @@ def test_caromil():
         # ✅ Calomeal APIは YYYY/MM/DD 形式が必須
         start_date = "2024/07/01"
         end_date = "2024/07/10"
-        print(f"📅 Fetching data from {start_date} to {end_date}")
+        unit = "day"
+
+        print(f"📅 Fetching data from {start_date} to {end_date} with unit '{unit}'")
 
         result = get_anthropometric_data(
             access_token=access_token,
             start_date=start_date,
-            end_date=end_date
+            end_date=end_date,
+            unit=unit
         )
 
-        print("✅ API result:", result)
         return jsonify({"status": "ok", "result": result})
 
     except Exception as e:
         print("❌ Error in /test-caromil:", str(e))
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 400
 
 # ✅ 認証コード取得用エンドポイント
 @app.route("/callback")
