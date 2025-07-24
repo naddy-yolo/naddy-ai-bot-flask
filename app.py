@@ -17,7 +17,8 @@ def test_caromil():
         if not access_token:
             raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
 
-        data = request.json or {}
+        # 🔧 JSONを強制的に取得（Content-Type が正しくなくても対応）
+        data = request.get_json(force=True) or {}
         start_date = data.get("start_date")
         end_date = data.get("end_date")
         unit = data.get("unit", "day")
