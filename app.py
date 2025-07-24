@@ -17,6 +17,7 @@ def test_caromil():
         if not access_token:
             raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
 
+        # 🔍 リクエストデータを明示的に取得
         data = request.get_json(force=True)
         start_date = data.get("start_date")
         end_date = data.get("end_date")
