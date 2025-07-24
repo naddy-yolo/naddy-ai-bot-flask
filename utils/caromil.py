@@ -1,12 +1,9 @@
-# utils/caromil.py
-
 import os
 import requests
 from dotenv import load_dotenv
 
 # ローカル用（Renderでは不要）
 load_dotenv()
-
 
 def refresh_access_token():
     """
@@ -42,12 +39,12 @@ def refresh_access_token():
 
 def get_anthropometric_data(access_token: str, start_date: str, end_date: str, unit: str = "day"):
     """
-    カロミルAPIから体重・体脂肪データを取得
-    ※ start_date / end_date は 'YYYY/MM/DD' を想定（Calomeal仕様）
+    カロミルAPIから体重・体脂肪データを取得（直接リストを返す）
+    ※ start_date / end_date は 'YYYY/MM/DD' 形式推奨
     """
     url = "https://test-connect.calomeal.com/api/anthropometric"
     headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/json",
         "Authorization": f"Bearer {access_token}"
     }
 
@@ -59,20 +56,19 @@ def get_anthropometric_data(access_token: str, start_date: str, end_date: str, u
 
     print("📤 カロミルAPIへ送信するbody:", body)
 
-    # 🔄 form形式で送信
-    response = requests.post(url, headers=headers, data=body)
+    response = requests.post(url, headers=headers, json=body)
 
     if response.status_code == 200:
         print("✅ データ取得成功")
-        return response.json().get("result")
+        return response.json()  # ← dictではなくlistとして返る想定
     elif response.status_code == 401:
         print("⚠️ トークン期限切れ。更新を試みます")
         new_token = refresh_access_token()
         headers["Authorization"] = f"Bearer {new_token}"
-        retry_response = requests.post(url, headers=headers, data=body)
+        retry_response = requests.post(url, headers=headers, json=body)
         if retry_response.status_code == 200:
             print("✅ トークン更新後の再取得成功")
-            return retry_response.json().get("result")
+            return retry_response.json()
         else:
             raise Exception(f"再試行失敗: {retry_response.status_code} - {retry_response.text}")
     else:
