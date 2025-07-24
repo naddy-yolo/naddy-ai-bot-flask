@@ -1,7 +1,6 @@
 import os
 import requests
 from dotenv import load_dotenv
-from datetime import datetime
 
 # ローカル用（Renderでは不要）
 load_dotenv()
@@ -41,7 +40,7 @@ def refresh_access_token():
 def get_anthropometric_data(access_token: str, start_date: str, end_date: str, unit: str = "day"):
     """
     カロミルAPIから体重・体脂肪データを取得
-    ※ start_date / end_date は 'YYYY/MM/DD' or 'YYYY-MM-DD' を想定
+    ※ Calomeal APIは start_date, end_date を YYYY/MM/DD 形式で送る必要あり
     """
     url = "https://test-connect.calomeal.com/api/anthropometric"
     headers = {
@@ -49,15 +48,9 @@ def get_anthropometric_data(access_token: str, start_date: str, end_date: str, u
         "Authorization": f"Bearer {access_token}"
     }
 
-    def normalize_date(date_str):
-        try:
-            return datetime.strptime(date_str, "%Y/%m/%d").strftime("%Y-%m-%d")
-        except Exception:
-            return date_str  # すでにフォーマット済みならそのまま
-
     body = {
-        "start_date": normalize_date(start_date),
-        "end_date": normalize_date(end_date),
+        "start_date": start_date,
+        "end_date": end_date,
         "unit": unit
     }
 
