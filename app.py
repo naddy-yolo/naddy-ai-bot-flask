@@ -1,13 +1,17 @@
 from flask import Flask, jsonify, request
 import os
 import requests
-from utils.caromil import get_anthropometric_data
+from utils.caromil import (
+    get_anthropometric_data,
+    get_meal_with_basis
+)
 
 app = Flask(__name__)
 
 @app.route('/')
 def index():
     return "Flask app is running!"
+
 
 # ✅ 体重・体脂肪データ取得（POST）
 @app.route('/test-caromil', methods=["POST"])
@@ -17,7 +21,6 @@ def test_caromil():
         if not access_token:
             raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
 
-        # 🔍 リクエストデータを明示的に取得
         data = request.get_json(force=True)
         start_date = data.get("start_date")
         end_date = data.get("end_date")
@@ -40,6 +43,7 @@ def test_caromil():
     except Exception as e:
         print("❌ Error in /test-caromil:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
+
 
 # ✅ ユーザー基本情報取得（GET）
 @app.route("/test-userinfo", methods=["GET"])
@@ -69,6 +73,32 @@ def test_userinfo():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
+
+# ✅ PFC・カロリー・目標量などを取得（POST）
+@app.route('/test-meal-basis', methods=["POST"])
+def test_meal_basis():
+    try:
+        access_token = os.getenv("CAROMIL_ACCESS_TOKEN")
+        if not access_token:
+            raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
+
+        data = request.get_json(force=True)
+        start_date = data.get("start_date")
+        end_date = data.get("end_date")
+
+        if not start_date or not end_date:
+            raise Exception("start_date, end_date は必須です")
+
+        print(f"🍽️ meal_with_basis取得: {start_date}〜{end_date}")
+
+        result = get_meal_with_basis(access_token, start_date, end_date)
+        return jsonify({"status": "ok", "result": result})
+
+    except Exception as e:
+        print("❌ Error in /test-meal-basis:", str(e))
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
 # ✅ 認証コード受け取り
 @app.route("/callback")
 def callback():
@@ -83,6 +113,7 @@ def callback():
         """
     else:
         return "❌ 認証コード（code）が見つかりませんでした", 400
+
 
 if __name__ == '__main__':
     app.run(debug=True)

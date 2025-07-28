@@ -76,3 +76,39 @@ def get_anthropometric_data(access_token: str, start_date: str, end_date: str, u
     else:
         print("❌ APIエラー:", response.status_code, response.text)
         raise Exception(f"APIエラー: {response.status_code} - {response.text}")
+
+
+def get_meal_with_basis(access_token: str, start_date: str, end_date: str):
+    """
+    カロミルAPIから PFC・カロリー・体重などを日別取得（/api/meal_with_basis）
+    """
+    url = "https://test-connect.calomeal.com/api/meal_with_basis"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = {
+        "start_date": start_date,
+        "end_date": end_date
+    }
+
+    print("📤 meal_with_basis APIへ送信:", data)
+
+    response = requests.post(url, headers=headers, data=data)
+
+    if response.status_code == 200:
+        print("✅ meal_with_basis データ取得成功")
+        return response.json()
+    elif response.status_code == 401:
+        print("⚠️ アクセストークン期限切れ、更新します")
+        new_token = refresh_access_token()
+        headers["Authorization"] = f"Bearer {new_token}"
+        retry_response = requests.post(url, headers=headers, data=data)
+        if retry_response.status_code == 200:
+            print("✅ トークン更新後の再取得成功")
+            return retry_response.json()
+        else:
+            raise Exception(f"再試行失敗: {retry_response.status_code} - {retry_response.text}")
+    else:
+        print("❌ APIエラー:", response.status_code, response.text)
+        raise Exception(f"APIエラー: {response.status_code} - {response.text}")
