@@ -5,6 +5,7 @@ from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis
 )
+from utils.storage import save_request  # ✅ Webhook保存処理を追加
 
 app = Flask(__name__)
 
@@ -99,7 +100,7 @@ def test_meal_basis():
         return jsonify({"status": "error", "message": str(e)}), 400
 
 
-# ✅ 認証コード受け取り
+# ✅ 認証コード受け取り（Calomeal認証用）
 @app.route("/callback")
 def callback():
     code = request.args.get("code")
@@ -113,6 +114,29 @@ def callback():
         """
     else:
         return "❌ 認証コード（code）が見つかりませんでした", 400
+
+
+# ✅ Webhook受信用エンドポイント（Lステップ連携用）
+@app.route('/receive-request', methods=["POST"])
+def receive_request():
+    try:
+        data = request.get_json(force=True)
+
+        required_keys = ['user_id', 'name', 'request_type', 'timestamp']
+        missing_keys = [k for k in required_keys if k not in data]
+        if missing_keys:
+            return jsonify({
+                'status': 'error',
+                'message': f'Missing required fields: {', '.join(missing_keys)}'
+            }), 400
+
+        save_request(data)
+
+        return jsonify({'status': 'success', 'message': 'Request saved successfully'}), 200
+
+    except Exception as e:
+        print("❌ Error in /receive-request:", str(e))
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 if __name__ == '__main__':
