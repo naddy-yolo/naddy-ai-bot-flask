@@ -1,8 +1,10 @@
-import os
-import openai
+# gpt_utils.py
 
-# OpenAI APIキーを環境変数から取得
-openai.api_key = os.getenv("OPENAI_API_KEY")
+import os
+from openai import OpenAI
+
+# OpenAIクライアントを初期化
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def classify_request_type(message_text: str) -> str:
     """
@@ -20,7 +22,7 @@ def classify_request_type(message_text: str) -> str:
             "該当する request_type を1単語のみで返してください。"
         )
 
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -29,7 +31,7 @@ def classify_request_type(message_text: str) -> str:
             temperature=0
         )
 
-        result = response["choices"][0]["message"]["content"].strip()
+        result = response.choices[0].message.content.strip()
         return result
 
     except Exception as e:
