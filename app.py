@@ -1,13 +1,13 @@
 from flask import Flask, jsonify, request
 import os
 import requests
-from datetime import datetime  # 🔧 timestamp補完用
+from datetime import datetime
 from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis
 )
 from utils.storage import save_request
-from utils.gpt_utils import classify_request_type  # ✅ GPT分類
+from utils.gpt_utils import classify_request_type
 
 app = Flask(__name__)
 
@@ -118,26 +118,33 @@ def callback():
 def receive_request():
     try:
         data = request.get_json(force=True)
-        print("🔍 受信データ:", data)  # ← 追加！
+        print("🔍 受信データ:", data)
 
-        # 🔍 message_text がない場合はエラー
-        if "message_text" not in data:
+        event = data.get("events", [{}])[0]
+        event_type = event.get("type")
+
+        # 分析依頼以外のイベント（例: unfollow）は無視
+        if event_type not in ["message", "postback"]:
             return jsonify({
-                "status": "error",
-                "message": "message_text は必須です"
-            }), 400
+                "status": "ignored",
+                "message": f"イベントタイプ '{event_type}' は対象外のため無視されました"
+            }), 200
 
-        # ✅ timestamp が無ければ現在時刻を補完
-        if "timestamp" not in data:
-            data["timestamp"] = datetime.now().isoformat()
+        # 仮で message_text を固定（postback or message 内容に応じて調整可能）
+        message_text = "分析依頼を送信しました"
 
-        # 🔍 GPTで request_type を自動判別
-        message_text = data["message_text"]
+        timestamp = event.get("timestamp") or datetime.now().timestamp()
+        timestamp_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
         request_type = classify_request_type(message_text)
 
-        # ✅ 分類結果を data に追加して保存
-        data["request_type"] = request_type
-        save_request(data)
+        request_data = {
+            "message_text": message_text,
+            "timestamp": timestamp_str,
+            "user_id": event.get("source", {}).get("userId"),
+            "request_type": request_type
+        }
+
+        save_request(request_data)
 
         return jsonify({
             "status": "success",
