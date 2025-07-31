@@ -3,9 +3,6 @@
 import os
 from openai import OpenAI
 
-# OpenAIクライアントを初期化
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 def classify_request_type(message_text: str) -> str:
     """
     ユーザーの自由入力メッセージから、request_type を自動判別する。
@@ -22,6 +19,9 @@ def classify_request_type(message_text: str) -> str:
             "該当する request_type を1単語のみで返してください。"
         )
 
+        # OpenAIクライアントを関数内で初期化（Renderエラー回避）
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -31,8 +31,7 @@ def classify_request_type(message_text: str) -> str:
             temperature=0
         )
 
-        result = response.choices[0].message.content.strip()
-        return result
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
         print("❌ classify_request_type error:", str(e))
