@@ -5,7 +5,8 @@ from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis
 )
-from utils.storage import save_request  # ✅ Webhook保存処理を追加
+from utils.storage import save_request
+from utils.gpt_utils import classify_request_type  # ✅ GPT分類を追加
 
 app = Flask(__name__)
 
@@ -122,17 +123,25 @@ def receive_request():
     try:
         data = request.get_json(force=True)
 
-        required_keys = ['user_id', 'name', 'request_type', 'timestamp']
-        missing_keys = [k for k in required_keys if k not in data]
-        if missing_keys:
+        # 🔍 必須キーのチェック（最低限必要なものだけ）
+        if "message_text" not in data or "timestamp" not in data:
             return jsonify({
-                'status': 'error',
-                'message': f'Missing required fields: {', '.join(missing_keys)}'
+                "status": "error",
+                "message": "message_text と timestamp は必須です"
             }), 400
 
+        # 🔍 GPTで request_type を自動判別
+        message_text = data["message_text"]
+        request_type = classify_request_type(message_text)
+
+        # ✅ 分類結果を data に追加して保存
+        data["request_type"] = request_type
         save_request(data)
 
-        return jsonify({'status': 'success', 'message': 'Request saved successfully'}), 200
+        return jsonify({
+            "status": "success",
+            "message": f"Request saved (type: {request_type})"
+        }), 200
 
     except Exception as e:
         print("❌ Error in /receive-request:", str(e))
