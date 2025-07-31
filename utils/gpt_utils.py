@@ -1,25 +1,24 @@
-# gpt_utils.py
-
 import os
-import openai  # ✅ 修正ポイント：正しいインポート方法
-
-# ✅ 修正ポイント：client を正しく初期化
-client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+from openai import OpenAI
 
 def classify_request_type(message_text: str) -> str:
     """
     ユーザーの自由入力メッセージから、request_type を自動判別する。
-    例：食事のアドバイス、カロミルの使い方、運動の相談など。
     """
     try:
+        # ✅ proxies を渡さずにクライアント初期化
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
         system_prompt = (
             "あなたはダイエット指導アシスタントです。"
-            "ユーザーからのメッセージを見て、その内容に応じて request_type を以下の中から1つ選んでください：\n"
-            "・meal_analysis（食事に関する内容全般。カロミルAPI連携の食事分析依頼や、食事への質問・相談も含む）\n"
-            "・calomeal_question（カロミルアプリの使い方・操作方法に関する内容）\n"
-            "・workout_question（運動・ストレッチ・エクササイズなどに関する相談）\n"
-            "・other（上記以外）\n"
-            "該当する request_type を1単語のみで返してください。"
+            "以下のユーザーの入力内容をもとに、その意図を次のいずれかに分類してください。"
+            "分類ラベルは以下の5つです：\n"
+            "1. meal_feedback（食事に関する報告や相談）\n"
+            "2. weight_report（体重・体脂肪の報告）\n"
+            "3. workout_question（運動や筋トレに関する質問）\n"
+            "4. system_question（アプリや記録方法などシステム関連の質問）\n"
+            "5. other（上記に当てはまらないもの）\n\n"
+            "回答は必ず、分類ラベル名のみで答えてください。"
         )
 
         response = client.chat.completions.create(
@@ -31,8 +30,7 @@ def classify_request_type(message_text: str) -> str:
             temperature=0
         )
 
-        result = response.choices[0].message.content.strip()
-        return result
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
         print("❌ classify_request_type error:", str(e))
