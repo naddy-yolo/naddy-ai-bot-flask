@@ -1,13 +1,13 @@
 from flask import Flask, jsonify, request
 import os
 import requests
-from datetime import datetime  # 🔧 追加
+from datetime import datetime  # 🔧 timestamp補完用
 from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis
 )
 from utils.storage import save_request
-from utils.gpt_utils import classify_request_type  # ✅ GPT分類を追加
+from utils.gpt_utils import classify_request_type  # ✅ GPT分類
 
 app = Flask(__name__)
 
@@ -118,6 +118,7 @@ def callback():
 def receive_request():
     try:
         data = request.get_json(force=True)
+        print("🔍 受信データ:", data)  # ← 追加！
 
         # 🔍 message_text がない場合はエラー
         if "message_text" not in data:
