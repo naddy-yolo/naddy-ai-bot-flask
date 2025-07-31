@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 import os
 import requests
+from datetime import datetime  # 🔧 追加
 from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis
@@ -13,7 +14,6 @@ app = Flask(__name__)
 @app.route('/')
 def index():
     return "Flask app is running!"
-
 
 # ✅ 体重・体脂肪データ取得（POST）
 @app.route('/test-caromil', methods=["POST"])
@@ -46,7 +46,6 @@ def test_caromil():
         print("❌ Error in /test-caromil:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
 
-
 # ✅ ユーザー基本情報取得（GET）
 @app.route("/test-userinfo", methods=["GET"])
 def test_userinfo():
@@ -75,7 +74,6 @@ def test_userinfo():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
-
 # ✅ PFC・カロリー・目標量などを取得（POST）
 @app.route('/test-meal-basis', methods=["POST"])
 def test_meal_basis():
@@ -100,7 +98,6 @@ def test_meal_basis():
         print("❌ Error in /test-meal-basis:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
 
-
 # ✅ 認証コード受け取り（Calomeal認証用）
 @app.route("/callback")
 def callback():
@@ -116,19 +113,22 @@ def callback():
     else:
         return "❌ 認証コード（code）が見つかりませんでした", 400
 
-
 # ✅ Webhook受信用エンドポイント（Lステップ連携用）
 @app.route('/receive-request', methods=["POST"])
 def receive_request():
     try:
         data = request.get_json(force=True)
 
-        # 🔍 必須キーのチェック（最低限必要なものだけ）
-        if "message_text" not in data or "timestamp" not in data:
+        # 🔍 message_text がない場合はエラー
+        if "message_text" not in data:
             return jsonify({
                 "status": "error",
-                "message": "message_text と timestamp は必須です"
+                "message": "message_text は必須です"
             }), 400
+
+        # ✅ timestamp が無ければ現在時刻を補完
+        if "timestamp" not in data:
+            data["timestamp"] = datetime.now().isoformat()
 
         # 🔍 GPTで request_type を自動判別
         message_text = data["message_text"]
@@ -146,7 +146,6 @@ def receive_request():
     except Exception as e:
         print("❌ Error in /receive-request:", str(e))
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
 
 if __name__ == '__main__':
     app.run(debug=True)
