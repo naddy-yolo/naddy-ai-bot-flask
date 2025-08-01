@@ -7,11 +7,14 @@ def classify_request_type(message_text: str) -> str:
     ユーザーの自由入力メッセージから、request_type を自動判別する。
     """
     try:
-        print("✅ gpt_utils.py: OpenAIクライアント初期化")
+        print("✅ gpt_utils.py: classify_request_type 開始")
         print("📨 message_text:", message_text)
-        print("✅ openai version:", openai.__version__)  # ← バージョン確認用ログ追加
+        print("✅ openai version:", openai.__version__)
+        print("📌 環境変数 OPENAI_API_KEY:", os.getenv("OPENAI_API_KEY"))
 
+        print("✅ OpenAI クライアント初期化前")
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        print("✅ OpenAI クライアント初期化完了")
 
         system_prompt = (
             "あなたはダイエット指導アシスタントです。"
@@ -25,6 +28,7 @@ def classify_request_type(message_text: str) -> str:
             "回答は必ず、分類ラベル名のみで答えてください。"
         )
 
+        print("✅ chat.completions.create 実行前")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -33,6 +37,7 @@ def classify_request_type(message_text: str) -> str:
             ],
             temperature=0
         )
+        print("✅ chat.completions.create 実行完了")
 
         return response.choices[0].message.content.strip()
 
