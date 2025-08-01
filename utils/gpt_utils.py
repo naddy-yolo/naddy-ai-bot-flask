@@ -1,4 +1,5 @@
 import os
+import openai
 from openai import OpenAI
 
 def classify_request_type(message_text: str) -> str:
@@ -7,7 +8,8 @@ def classify_request_type(message_text: str) -> str:
     """
     try:
         print("✅ gpt_utils.py: OpenAIクライアント初期化")
-        print("📨 message_text:", message_text)  # ←★ 追加
+        print("📨 message_text:", message_text)
+        print("✅ openai version:", openai.__version__)  # ← バージョン確認用ログ追加
 
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
