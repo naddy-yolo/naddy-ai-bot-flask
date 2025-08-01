@@ -1,11 +1,15 @@
-import os
+# ✅ 修正済み：gpt_utils.py（OpenAI SDK v1.47.0 対応）
+# - openai.chat.completions.create() 使用（v1対応）
+# - os.environ から proxy 無効化
+# - openai.Client() 経由で初期化
 
-# ✅ Render環境などで自動設定されるproxy環境変数を無効化
+import os
+import traceback
+from openai import OpenAI
+
+# ✅ 自動的に設定される proxy 環境変数を明示的に除去
 for proxy_key in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
     os.environ.pop(proxy_key, None)
-
-import openai
-import traceback
 
 def classify_request_type(message_text: str) -> str:
     """
@@ -27,7 +31,8 @@ def classify_request_type(message_text: str) -> str:
             print("❌ OPENAI_API_KEY が設定されていません")
             return "other"
 
-        openai.api_key = api_key
+        # ✅ OpenAIクライアントを初期化（v1.47.0）
+        client = OpenAI(api_key=api_key)
 
         system_prompt = (
             "あなたはダイエット指導アシスタントです。"
@@ -41,8 +46,8 @@ def classify_request_type(message_text: str) -> str:
             "回答は必ず、分類ラベル名のみで答えてください。"
         )
 
-        print("✅ chat.completions.create 実行前")
-        response = openai.chat.completions.create(
+        print("✅ client.chat.completions.create 実行前")
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -50,7 +55,7 @@ def classify_request_type(message_text: str) -> str:
             ],
             temperature=0
         )
-        print("✅ chat.completions.create 実行完了")
+        print("✅ client.chat.completions.create 実行完了")
 
         result = response.choices[0].message.content.strip()
         print("🎯 分類結果:", result)
