@@ -1,9 +1,16 @@
 import os
-from openai import OpenAI
+import openai
 
 def classify_request_type(message_text: str) -> str:
     """
     ユーザーの自由入力メッセージから、request_type を自動判別する。
+    使用モデル：gpt-4o
+    分類カテゴリ：
+        - meal_feedback
+        - weight_report
+        - workout_question
+        - system_question
+        - other
     """
     try:
         print("✅ gpt_utils.py: classify_request_type 開始")
@@ -14,7 +21,7 @@ def classify_request_type(message_text: str) -> str:
             print("❌ OPENAI_API_KEY が設定されていません")
             return "other"
 
-        client = OpenAI(api_key=api_key)
+        openai.api_key = api_key
 
         system_prompt = (
             "あなたはダイエット指導アシスタントです。"
@@ -28,8 +35,8 @@ def classify_request_type(message_text: str) -> str:
             "回答は必ず、分類ラベル名のみで答えてください。"
         )
 
-        print("✅ chat.completions.create 実行前")
-        response = client.chat.completions.create(
+        print("✅ ChatCompletion.create 実行前")
+        response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -37,9 +44,11 @@ def classify_request_type(message_text: str) -> str:
             ],
             temperature=0
         )
-        print("✅ chat.completions.create 実行完了")
+        print("✅ ChatCompletion.create 実行完了")
 
-        return response.choices[0].message.content.strip()
+        result = response.choices[0].message.content.strip()
+        print("🎯 分類結果:", result)
+        return result
 
     except Exception as e:
         print("❌ classify_request_type error:", str(e))
