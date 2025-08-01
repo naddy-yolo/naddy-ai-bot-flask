@@ -1,4 +1,9 @@
 import os
+
+# ✅ Render環境などで自動設定されるproxy環境変数を無効化
+for proxy_key in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
+    os.environ.pop(proxy_key, None)
+
 import openai
 import traceback
 
@@ -53,5 +58,6 @@ def classify_request_type(message_text: str) -> str:
 
     except Exception as e:
         print("❌ classify_request_type error:", str(e))
-        traceback.print_exc()  # ← スタックトレースで発生元を特定
+        print("📛 スタックトレース:")
+        print(traceback.format_exc())
         return "other"
