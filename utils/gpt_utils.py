@@ -1,11 +1,14 @@
-# ✅ 修正済み：gpt_utils.py（OpenAI SDK v1.47.0 対応）
-# - openai.chat.completions.create() 使用（v1対応）
-# - os.environ から proxy 無効化
-# - openai.Client() 経由で初期化
-
 import os
 import traceback
 from openai import OpenAI
+
+# 🔍 現在のファイル内容をログ出力（デバッグ用）
+print("🔍 DEBUG: gpt_utils.py 現在のコード内容表示開始")
+with open(__file__, "r") as f:
+    lines = f.readlines()
+    for i, line in enumerate(lines[:30]):
+        print(f"{i+1:02d}: {line.rstrip()}")
+print("🔍 DEBUG: gpt_utils.py 現在のコード内容表示終了")
 
 # ✅ 自動的に設定される proxy 環境変数を明示的に除去
 for proxy_key in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
