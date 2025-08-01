@@ -1,5 +1,6 @@
 import os
 import openai
+import traceback
 
 def classify_request_type(message_text: str) -> str:
     """
@@ -52,4 +53,5 @@ def classify_request_type(message_text: str) -> str:
 
     except Exception as e:
         print("❌ classify_request_type error:", str(e))
+        traceback.print_exc()  # ← スタックトレースで発生元を特定
         return "other"
