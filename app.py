@@ -130,11 +130,22 @@ def receive_request():
                 "message": f"イベントタイプ '{event_type}' は対象外のため無視されました"
             }), 200
 
-        # 仮で message_text を固定（postback or message 内容に応じて調整可能）
-        message_text = "分析依頼を送信しました"
+        # ✅ メッセージ内容の取得（message or postback）
+        message_text = ""
+        if event_type == "message":
+            message_text = event.get("message", {}).get("text", "")
+        elif event_type == "postback":
+            message_text = event.get("postback", {}).get("data", "")
+
+        if not message_text:
+            return jsonify({
+                "status": "ignored",
+                "message": "メッセージテキストが取得できませんでした"
+            }), 200
 
         timestamp = event.get("timestamp") or datetime.now().timestamp()
         timestamp_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
+
         request_type = classify_request_type(message_text)
 
         request_data = {
