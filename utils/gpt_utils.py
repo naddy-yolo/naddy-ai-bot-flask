@@ -35,8 +35,8 @@ def classify_request_type(message_text: str) -> str:
             "回答は必ず、分類ラベル名のみで答えてください。"
         )
 
-        print("✅ ChatCompletion.create 実行前")
-        response = openai.ChatCompletion.create(
+        print("✅ chat.completions.create 実行前")
+        response = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -44,7 +44,7 @@ def classify_request_type(message_text: str) -> str:
             ],
             temperature=0
         )
-        print("✅ ChatCompletion.create 実行完了")
+        print("✅ chat.completions.create 実行完了")
 
         result = response.choices[0].message.content.strip()
         print("🎯 分類結果:", result)
