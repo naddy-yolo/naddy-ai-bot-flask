@@ -1,6 +1,6 @@
 import os
 import traceback
-from openai import OpenAI
+from openai import Client
 
 # 🔍 現在のファイル内容をログ出力（Render側のデプロイ検証用）
 print("🔍 DEBUG: gpt_utils.py 現在のコード内容表示開始")
@@ -33,12 +33,7 @@ def classify_request_type(message_text: str) -> str:
         if not api_key:
             raise ValueError("OPENAI_API_KEY is not set in environment variables.")
 
-        client = OpenAI(api_key=api_key)
-
-        # ✅ デバッグログ追加（クライアント構造を確認）
-        print("✅ client.__dict__:", vars(client))
-        print("✅ client._client:", client._client)
-        print("✅ client._client._client.__dict__:", vars(client._client._client))
+        client = Client(api_key=api_key)
 
         response = client.chat.completions.create(
             model="gpt-4o",
