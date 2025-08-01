@@ -1,6 +1,8 @@
 import os
 from openai import OpenAI
 
+print("✅ gpt_utils.py: OpenAIクライアント初期化")  # ← ここを追加
+
 def classify_request_type(message_text: str) -> str:
     """
     ユーザーの自由入力メッセージから、request_type を自動判別する。
