@@ -2,7 +2,7 @@ import os
 import traceback
 from openai import OpenAI
 
-# 🔍 現在のファイル内容をログ出力（デバッグ用）
+# 🔍 現在のファイル内容をログ出力（Render側のデプロイ検証用）
 print("🔍 DEBUG: gpt_utils.py 現在のコード内容表示開始")
 with open(__file__, "r") as f:
     lines = f.readlines()
@@ -10,7 +10,7 @@ with open(__file__, "r") as f:
         print(f"{i+1:02d}: {line.rstrip()}")
 print("🔍 DEBUG: gpt_utils.py 現在のコード内容表示終了")
 
-# ✅ 自動的に設定される proxy 環境変数を明示的に除去
+# ✅ 自動的に設定される proxy 環境変数を明示的に除去（念のため）
 for proxy_key in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
     os.environ.pop(proxy_key, None)
 
@@ -29,43 +29,40 @@ def classify_request_type(message_text: str) -> str:
         print("✅ gpt_utils.py: classify_request_type 開始")
         print("📨 message_text:", message_text)
 
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            print("❌ OPENAI_API_KEY が設定されていません")
-            return "other"
+            raise ValueError("OPENAI_API_KEY is not set in environment variables.")
 
-        # ✅ OpenAIクライアントを初期化（v1.47.0）
         client = OpenAI(api_key=api_key)
 
-        system_prompt = (
-            "あなたはダイエット指導アシスタントです。"
-            "以下のユーザーの入力内容をもとに、その意図を次のいずれかに分類してください。\n\n"
-            "分類ラベルは以下の5つです：\n"
-            "1. meal_feedback（食事に関する報告や相談）\n"
-            "2. weight_report（体重・体脂肪の報告）\n"
-            "3. workout_question（運動や筋トレに関する質問）\n"
-            "4. system_question（アプリや記録方法などシステム関連の質問）\n"
-            "5. other（上記に当てはまらないもの）\n\n"
-            "回答は必ず、分類ラベル名のみで答えてください。"
-        )
+        # ✅ デバッグログ追加（クライアント構造を確認）
+        print("✅ client.__dict__:", vars(client))
+        print("✅ client._client:", client._client)
+        print("✅ client._client._client.__dict__:", vars(client._client._client))
 
-        print("✅ client.chat.completions.create 実行前")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message_text}
+                {
+                    "role": "system",
+                    "content": (
+                        "あなたはメッセージの分類AIです。次の選択肢の中からもっとも適切な分類を返してください："
+                        "[meal_feedback, weight_report, workout_question, system_question, other]。"
+                        "分類名のみをJSON形式で出力してください。"
+                    ),
+                },
+                {"role": "user", "content": message_text},
             ],
-            temperature=0
+            response_format="json",
+            temperature=0.0,
         )
-        print("✅ client.chat.completions.create 実行完了")
 
-        result = response.choices[0].message.content.strip()
-        print("🎯 分類結果:", result)
-        return result
+        category = response.choices[0].message.content.strip()
+        print("✅ 分類結果:", category)
+        return category
 
     except Exception as e:
-        print("❌ classify_request_type error:", str(e))
+        print("❌ classify_request_type error:", e)
         print("📛 スタックトレース:")
-        print(traceback.format_exc())
+        traceback.print_exc()
         return "other"
