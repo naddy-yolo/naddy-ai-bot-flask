@@ -1,19 +1,19 @@
 import os
 from openai import OpenAI
 
-print("✅ gpt_utils.py: OpenAIクライアント初期化")  # ← ここを追加
-
 def classify_request_type(message_text: str) -> str:
     """
     ユーザーの自由入力メッセージから、request_type を自動判別する。
     """
     try:
-        # ✅ proxies を渡さずにクライアント初期化
+        print("✅ gpt_utils.py: OpenAIクライアント初期化")
+        print("📨 message_text:", message_text)  # ←★ 追加
+
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
         system_prompt = (
             "あなたはダイエット指導アシスタントです。"
-            "以下のユーザーの入力内容をもとに、その意図を次のいずれかに分類してください。"
+            "以下のユーザーの入力内容をもとに、その意図を次のいずれかに分類してください。\n\n"
             "分類ラベルは以下の5つです：\n"
             "1. meal_feedback（食事に関する報告や相談）\n"
             "2. weight_report（体重・体脂肪の報告）\n"
