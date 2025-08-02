@@ -44,10 +44,10 @@ def classify_request_type(message_text: str) -> str:
         if "食事分析" in message_text:
             print("🔍 固定分類: meal_feedback")
             return "meal_feedback"
-        if "体重報告" in message_text:
+        if "体重" in message_text:
             print("🔍 固定分類: weight_report")
             return "weight_report"
-        if "運動質問" in message_text:
+        if "運動" in message_text:
             print("🔍 固定分類: workout_question")
             return "workout_question"
 
