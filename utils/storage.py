@@ -1,15 +1,18 @@
+# utils/storage.py
+
 import os
 import json
 
-# 保存先ファイル（プロジェクトルートに作成されます）
-DATA_FILE = 'requests.json'
+# 📛 統一された保存ファイル名
+DATA_FILE = 'received_requests.json'
 
 def save_request(data: dict):
     """
     リクエストデータをJSONファイルに追記保存する（配列構造）
     将来的にSQLiteに切り替え可能なように構造を分離しておく
     """
-    data['status'] = 'unprocessed'
+    # ✅ ステータスは日本語で統一（UI表示と一致）
+    data['status'] = '未返信'
 
     # 既存データを読み込み
     if os.path.exists(DATA_FILE):
