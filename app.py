@@ -6,8 +6,11 @@ from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis
 )
-from utils.db import save_request, init_db  # ✅ ここを変更
+from utils.db import save_request, init_db  # ✅ SQLite対応
 from utils.gpt_utils import classify_request_type
+
+# ✅ 本番Renderでも確実に初期化されるようにFlaskインスタンス作成前に呼び出す
+init_db()
 
 app = Flask(__name__)
 
@@ -144,7 +147,7 @@ def receive_request():
             "request_type": request_type
         }
 
-        save_request(request_data)  # ✅ SQLite保存に切替済み！
+        save_request(request_data)
 
         return jsonify({
             "status": "success",
@@ -156,5 +159,4 @@ def receive_request():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == '__main__':
-    init_db()  # ✅ 初回起動時にDBとテーブルを自動作成
     app.run(debug=True)
