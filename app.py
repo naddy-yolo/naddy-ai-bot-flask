@@ -15,7 +15,6 @@ app = Flask(__name__)
 def index():
     return "Flask app is running!"
 
-# ✅ 体重・体脂肪データ取得（POST）
 @app.route('/test-caromil', methods=["POST"])
 def test_caromil():
     try:
@@ -31,8 +30,6 @@ def test_caromil():
         if not start_date or not end_date:
             raise Exception("start_date, end_date は必須です")
 
-        print(f"📅 Fetching data from {start_date} to {end_date} with unit '{unit}'")
-
         result = get_anthropometric_data(
             access_token=access_token,
             start_date=start_date,
@@ -46,7 +43,6 @@ def test_caromil():
         print("❌ Error in /test-caromil:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
 
-# ✅ ユーザー基本情報取得（GET）
 @app.route("/test-userinfo", methods=["GET"])
 def test_userinfo():
     try:
@@ -74,7 +70,6 @@ def test_userinfo():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
-# ✅ PFC・カロリー・目標量などを取得（POST）
 @app.route('/test-meal-basis', methods=["POST"])
 def test_meal_basis():
     try:
@@ -89,8 +84,6 @@ def test_meal_basis():
         if not start_date or not end_date:
             raise Exception("start_date, end_date は必須です")
 
-        print(f"🍽️ meal_with_basis取得: {start_date}〜{end_date}")
-
         result = get_meal_with_basis(access_token, start_date, end_date)
         return jsonify({"status": "ok", "result": result})
 
@@ -98,7 +91,6 @@ def test_meal_basis():
         print("❌ Error in /test-meal-basis:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
 
-# ✅ 認証コード受け取り（Calomeal認証用）
 @app.route("/callback")
 def callback():
     code = request.args.get("code")
@@ -113,7 +105,6 @@ def callback():
     else:
         return "❌ 認証コード（code）が見つかりませんでした", 400
 
-# ✅ Webhook受信用エンドポイント（Lステップ連携用）
 @app.route('/receive-request', methods=["POST"])
 def receive_request():
     try:
@@ -123,14 +114,12 @@ def receive_request():
         event = data.get("events", [{}])[0]
         event_type = event.get("type")
 
-        # 分析依頼以外のイベント（例: unfollow）は無視
         if event_type not in ["message", "postback"]:
             return jsonify({
                 "status": "ignored",
                 "message": f"イベントタイプ '{event_type}' は対象外のため無視されました"
             }), 200
 
-        # ✅ メッセージ内容の取得（message or postback）
         message_text = ""
         if event_type == "message":
             message_text = event.get("message", {}).get("text", "")
@@ -149,7 +138,7 @@ def receive_request():
         request_type = classify_request_type(message_text)
 
         request_data = {
-            "message_text": message_text,
+            "message": message_text,  # ✅ 修正ポイント
             "timestamp": timestamp_str,
             "user_id": event.get("source", {}).get("userId"),
             "request_type": request_type
