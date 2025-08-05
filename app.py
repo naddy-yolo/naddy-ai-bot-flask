@@ -6,7 +6,7 @@ from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis
 )
-from utils.db import save_request, init_db  # ✅ SQLite対応
+from utils.db import save_request, init_db  # DB操作用ユーティリティ（SQLAlchemy対応）
 from utils.gpt_utils import classify_request_type
 
 # ✅ 本番Renderでも確実に初期化されるようにFlaskインスタンス作成前に呼び出す
