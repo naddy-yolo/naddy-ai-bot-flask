@@ -1,45 +1,41 @@
 # utils/db.py
 
-import sqlite3
-from pathlib import Path
+from sqlalchemy import create_engine, Column, Integer, String, Text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import os
 
-DB_PATH = "requests.db"
+DATABASE_URL = os.environ.get("POSTGRES_URL")
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(bind=engine)
+
+Base = declarative_base()
+
+class Request(Base):
+    __tablename__ = "requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String)
+    message = Column(Text)
+    timestamp = Column(String)
+    request_type = Column(String)
+    status = Column(String, default="未返信")
 
 def init_db():
-    """SQLite データベースとテーブルを初期化する"""
-    Path(DB_PATH).touch(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            message TEXT,
-            timestamp TEXT,
-            request_type TEXT,
-            status TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    Base.metadata.create_all(bind=engine)
 
 def save_request(data: dict):
-    """受信リクエストを SQLite に保存する"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    data.setdefault("status", "未返信")
-
-    cursor.execute("""
-        INSERT INTO requests (user_id, message, timestamp, request_type, status)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        data.get("user_id"),
-        data.get("message"),
-        data.get("timestamp"),
-        data.get("request_type"),
-        data.get("status")
-    ))
-
-    conn.commit()
-    conn.close()
+    session = SessionLocal()
+    try:
+        request = Request(
+            user_id=data.get("user_id"),
+            message=data.get("message"),
+            timestamp=data.get("timestamp"),
+            request_type=data.get("request_type"),
+            status=data.get("status", "未返信")
+        )
+        session.add(request)
+        session.commit()
+    finally:
+        session.close()
