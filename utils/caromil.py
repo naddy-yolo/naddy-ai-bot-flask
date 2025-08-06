@@ -2,6 +2,7 @@ import os
 import requests
 from datetime import datetime, timedelta
 from dateutil import parser  # pip install python-dateutil
+import pytz  # pip install pytz
 from utils.db import get_tokens, update_tokens
 
 # 固定値（Render環境変数から取得）
@@ -137,3 +138,35 @@ def get_meal_with_basis(user_id: str, start_date: str, end_date: str):
             raise Exception(f"再試行失敗: {retry_response.status_code} - {retry_response.text}")
     else:
         raise Exception(f"APIエラー: {response.status_code} - {response.text}")
+
+
+def get_meal_with_basis_hybrid(user_id: str):
+    """
+    昨日〜今日の2日分を取得し、JST時刻に応じて1日分だけ返す
+    JST 5時までは前日、それ以降は当日
+    """
+    jst = pytz.timezone("Asia/Tokyo")
+    now_jst = datetime.now(jst)
+
+    today = now_jst.date()
+    yesterday = today - timedelta(days=1)
+
+    # 昨日〜今日の2日分を取得
+    raw_data = get_meal_with_basis(
+        user_id,
+        start_date=yesterday.strftime("%Y/%m/%d"),
+        end_date=today.strftime("%Y/%m/%d")
+    )
+
+    # 対象日を決定
+    target_date = yesterday if now_jst.hour < 5 else today
+    target_date_str = target_date.strftime("%Y-%m-%d")  # API返却形式に合わせる
+
+    # 1日分にフィルタリング
+    filtered_data = [
+        entry for entry in raw_data.get("result", [])
+        if entry.get("date") == target_date_str
+    ]
+
+    print(f"🎯 ハイブリッド方式: {target_date_str} のデータを返却（{len(filtered_data)}件）")
+    return filtered_data

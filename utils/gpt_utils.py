@@ -26,7 +26,9 @@ http_client = SyncHttpxClientWrapper(
     follow_redirects=True,
 )
 
-
+# =====================================================
+# 分類関数
+# =====================================================
 def classify_request_type(message_text: str) -> str:
     """
     ユーザーの自由入力メッセージから request_type を自動判別する。
@@ -41,20 +43,16 @@ def classify_request_type(message_text: str) -> str:
         print("✅ gpt_utils.py: classify_request_type 開始")
         print("📨 message_text:", message_text)
 
-        # ✅ 食事分析ボタンなどテキスト判定で固定分類
+        # 固定分類（キーワードマッチ）
         if "食事分析" in message_text:
-            print("🔍 固定分類: meal_feedback")
             return "meal_feedback"
         if "体重" in message_text:
-            print("🔍 固定分類: weight_report")
             return "weight_report"
         if "運動" in message_text:
-            print("🔍 固定分類: workout_question")
             return "workout_question"
 
-        # ✅ 通常の自由入力はGPTに分類させる
+        # GPTによる分類
         client = OpenAI(http_client=http_client)
-
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -79,19 +77,20 @@ def classify_request_type(message_text: str) -> str:
 
     except Exception as e:
         print("❌ classify_request_type error:", e)
-        print("📛 スタックトレース:")
         traceback.print_exc()
         return "other"
 
 
+# =====================================================
+# 共通プロンプト実行関数
+# =====================================================
 def generate_advice_by_prompt(prompt: str) -> str:
     """
-    ナディ式テンプレで構成したプロンプトを元に、GPTからアドバイス文を生成
+    プロンプトを元に、GPTからアドバイス文を生成
     """
     try:
         print("🧠 generate_advice_by_prompt 開始")
         client = OpenAI(http_client=http_client)
-
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -108,7 +107,6 @@ def generate_advice_by_prompt(prompt: str) -> str:
             temperature=0.7,
             max_tokens=500,
         )
-
         advice = response.choices[0].message.content.strip()
         print("✅ アドバイス生成成功")
         return advice
@@ -117,3 +115,57 @@ def generate_advice_by_prompt(prompt: str) -> str:
         print("❌ アドバイス生成エラー:", e)
         traceback.print_exc()
         return "アドバイスの生成に失敗しました。"
+
+
+# =====================================================
+# タイプ別アドバイス生成関数
+# =====================================================
+def generate_meal_advice(meal_data: dict, body_data: dict) -> str:
+    """
+    食事データ（meal_with_basis）と体組成データ（anthropometric）から食事アドバイスを生成
+    """
+    prompt = (
+        "以下はクライアントの食事記録と体重・体脂肪データです。\n"
+        "これを基にナディ式ダイエット指導のアドバイスを作成してください。\n"
+        "ポジティブなフィードバックと改善提案を含めてください。\n\n"
+        f"【食事データ】\n{meal_data}\n\n"
+        f"【体重・体脂肪データ】\n{body_data}\n"
+    )
+    return generate_advice_by_prompt(prompt)
+
+
+def generate_workout_advice(message_text: str) -> str:
+    """
+    運動に関する質問へのアドバイスを生成
+    """
+    prompt = (
+        "以下はクライアントからの運動に関する質問です。\n"
+        "あなたはプロの女性向けダイエット・フィットネストレーナーとして、"
+        "優しく、かつ根拠のあるアドバイスを返してください。\n\n"
+        f"【質問】\n{message_text}\n"
+    )
+    return generate_advice_by_prompt(prompt)
+
+
+def generate_operation_advice(message_text: str) -> str:
+    """
+    Botやアプリ操作に関する質問への回答を生成
+    """
+    prompt = (
+        "以下はクライアントからのアプリやBotの操作に関する質問です。\n"
+        "あなたはシンプルでわかりやすい回答を返してください。\n\n"
+        f"【質問】\n{message_text}\n"
+    )
+    return generate_advice_by_prompt(prompt)
+
+
+def generate_other_reply(message_text: str) -> str:
+    """
+    その他メッセージへの返信を生成
+    """
+    prompt = (
+        "以下はクライアントからの一般的なメッセージです。\n"
+        "あなたはナディとして、丁寧かつ親しみのある口調で返信してください。\n\n"
+        f"【メッセージ】\n{message_text}\n"
+    )
+    return generate_advice_by_prompt(prompt)

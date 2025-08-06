@@ -51,7 +51,10 @@ def init_db():
 # =========================
 # requests テーブル用関数
 # =========================
-def save_request(data: dict):
+def save_request(data: dict) -> int:
+    """
+    新規リクエストを保存し、そのレコードIDを返す
+    """
     session = SessionLocal()
     try:
         request = Request(
@@ -63,6 +66,8 @@ def save_request(data: dict):
         )
         session.add(request)
         session.commit()
+        session.refresh(request)  # INSERT後のIDを取得
+        return request.id
     finally:
         session.close()
 
@@ -93,6 +98,24 @@ def update_advice_text(user_id: str, timestamp: str, advice_text: str):
             print(f"✅ advice_text 更新完了: {user_id} @ {timestamp}")
         else:
             print("⚠️ 該当レコードが見つかりませんでした")
+    finally:
+        session.close()
+
+
+def update_request_with_advice(request_id: int, advice_text: str, status: str = "未返信"):
+    """
+    request_id を指定して advice_text と status を更新する
+    """
+    session = SessionLocal()
+    try:
+        request = session.query(Request).filter(Request.id == request_id).first()
+        if request:
+            request.advice_text = advice_text
+            request.status = status
+            session.commit()
+            print(f"✅ Request更新完了: id={request_id}, status={status}")
+        else:
+            print(f"⚠️ 該当リクエストが見つかりませんでした: id={request_id}")
     finally:
         session.close()
 

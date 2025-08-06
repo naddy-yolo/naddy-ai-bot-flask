@@ -3,10 +3,16 @@ import requests
 from datetime import datetime
 from utils.caromil import (
     get_anthropometric_data,
-    get_meal_with_basis
+    get_meal_with_basis_hybrid
 )
-from utils.db import save_request, init_db  # DB操作用ユーティリティ（SQLAlchemy対応）
-from utils.gpt_utils import classify_request_type
+from utils.db import save_request, update_request_with_advice, init_db
+from utils.gpt_utils import (
+    classify_request_type,
+    generate_meal_advice,
+    generate_workout_advice,
+    generate_operation_advice,
+    generate_other_reply
+)
 
 # ✅ 本番Renderでも確実に初期化されるようにFlaskインスタンス作成前に呼び出す
 init_db()
@@ -20,10 +26,6 @@ def index():
 
 @app.route('/test-caromil', methods=["POST"])
 def test_caromil():
-    """
-    DBベースのトークン管理を利用して /api/anthropometric を叩く
-    必須: user_id, start_date, end_date
-    """
     try:
         data = request.get_json(force=True)
         user_id = data.get("user_id")
@@ -42,9 +44,7 @@ def test_caromil():
             end_date=end_date,
             unit=unit
         )
-
         return jsonify({"status": "ok", "result": result})
-
     except Exception as e:
         print("❌ Error in /test-caromil:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
@@ -52,10 +52,6 @@ def test_caromil():
 
 @app.route("/test-userinfo", methods=["POST"])
 def test_userinfo():
-    """
-    DBベースのトークン管理を利用して /api/user_info を叩く
-    必須: user_id
-    """
     try:
         data = request.get_json(force=True)
         user_id = data.get("user_id")
@@ -81,18 +77,14 @@ def test_userinfo():
                 "message": f"ユーザー情報取得失敗: {response.status_code}",
                 "response": response.text
             }), response.status_code
-
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
 
 @app.route('/test-meal-basis', methods=["POST"])
 def test_meal_basis():
-    """
-    DBベースのトークン管理を利用して /api/meal_with_basis を叩く
-    必須: user_id, start_date, end_date
-    """
     try:
+        from utils.caromil import get_meal_with_basis
         data = request.get_json(force=True)
         user_id = data.get("user_id")
         start_date = data.get("start_date")
@@ -105,7 +97,6 @@ def test_meal_basis():
 
         result = get_meal_with_basis(user_id, start_date, end_date)
         return jsonify({"status": "ok", "result": result})
-
     except Exception as e:
         print("❌ Error in /test-meal-basis:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
@@ -155,21 +146,43 @@ def receive_request():
 
         timestamp = event.get("timestamp") or datetime.now().timestamp()
         timestamp_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
+        user_id = event.get("source", {}).get("userId")
 
+        # メッセージ分類
         request_type = classify_request_type(message_text)
 
-        request_data = {
+        # まずリクエストをDBに保存し、そのIDを取得
+        request_id = save_request({
             "message": message_text,
             "timestamp": timestamp_str,
-            "user_id": event.get("source", {}).get("userId"),
+            "user_id": user_id,
             "request_type": request_type
-        }
+        })
 
-        save_request(request_data)
+        # タイプ別アドバイス生成
+        advice_text = None
+        if request_type == "meal_feedback":
+            meal_data = get_meal_with_basis_hybrid(user_id)
+            body_data = get_anthropometric_data(
+                user_id,
+                start_date=timestamp_str[:10],
+                end_date=timestamp_str[:10]
+            )
+            advice_text = generate_meal_advice(meal_data, body_data)
+        elif request_type == "workout_question":
+            advice_text = generate_workout_advice(message_text)
+        elif request_type == "system_question":
+            advice_text = generate_operation_advice(message_text)
+        else:
+            advice_text = generate_other_reply(message_text)
+
+        # アドバイスをDBに更新（statusは未返信）
+        if advice_text:
+            update_request_with_advice(request_id, advice_text, status="未返信")
 
         return jsonify({
             "status": "success",
-            "message": f"Request saved (type: {request_type})"
+            "message": f"Request saved and advice generated (type: {request_type})"
         }), 200
 
     except Exception as e:
