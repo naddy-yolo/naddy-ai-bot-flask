@@ -1,7 +1,6 @@
 from flask import Flask, jsonify, request
 import requests
 from datetime import datetime
-from sqlalchemy import text
 from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis_hybrid
@@ -15,8 +14,8 @@ from utils.gpt_utils import (
     generate_other_reply
 )
 
-# ✅ DB初期化 & エンジン取得
-engine = init_db()
+# ✅ 本番Renderでも確実に初期化されるようにFlaskインスタンス作成前に呼び出す
+init_db()
 
 app = Flask(__name__)
 
@@ -179,6 +178,7 @@ def receive_request():
 
         # アドバイスをDBに更新（statusは未返信）
         if advice_text:
+            print("🔍 生成されたアドバイス内容:", advice_text)  # ← 追加
             update_request_with_advice(request_id, advice_text, status="未返信")
 
         return jsonify({
@@ -189,25 +189,6 @@ def receive_request():
     except Exception as e:
         print("❌ Error in /receive-request:", str(e))
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-# ==============================
-# デバッグ用: 最新アドバイス確認
-# ==============================
-@app.route("/debug-requests", methods=["GET"])
-def debug_requests():
-    """
-    DBに保存されている最新のリクエスト（アドバイス）を確認
-    """
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT id, user_id, advice_text, status, created_at FROM requests ORDER BY id DESC LIMIT 5")
-            ).mappings().all()
-
-        return jsonify([dict(row) for row in rows]), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
