@@ -30,3 +30,4 @@ gunicorn==21.2.0
 sqlalchemy
 psycopg2-binary
 python-dateutil==2.9.0
+pytz==2025.1
