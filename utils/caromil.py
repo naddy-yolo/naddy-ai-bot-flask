@@ -14,6 +14,15 @@ ANTHRO_URL = "https://test-connect.calomeal.com/api/anthropometric"
 MEAL_BASIS_URL = "https://test-connect.calomeal.com/api/meal_with_basis"
 
 
+def to_slash_date(date_str: str) -> str:
+    """
+    "YYYY-MM-DD" → "YYYY/MM/DD" に変換
+    """
+    if "-" in date_str:
+        return date_str.replace("-", "/")
+    return date_str
+
+
 def get_access_token(user_id: str) -> str:
     """
     DBから有効なアクセストークンを取得。
@@ -71,8 +80,8 @@ def get_anthropometric_data(user_id: str, start_date: str, end_date: str, unit: 
         "Authorization": f"Bearer {access_token}"
     }
     data = {
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": to_slash_date(start_date),
+        "end_date": to_slash_date(end_date),
         "unit": unit
     }
 
@@ -106,8 +115,8 @@ def get_meal_with_basis(user_id: str, start_date: str, end_date: str):
         "Content-Type": "application/x-www-form-urlencoded"
     }
     data = {
-        "start_date": start_date,
-        "end_date": end_date
+        "start_date": to_slash_date(start_date),
+        "end_date": to_slash_date(end_date)
     }
 
     print("📤 meal_with_basis APIへ送信:", data)

@@ -1,5 +1,5 @@
 from utils.db import get_unreplied_requests, update_advice_text
-from utils.caromil import refresh_access_token, get_meal_with_basis, get_anthropometric_data
+from utils.caromil import get_meal_with_basis, get_anthropometric_data
 from utils.gpt_utils import generate_advice_by_prompt
 
 from datetime import datetime
@@ -10,12 +10,10 @@ def format_prompt(meal_data: dict, body_data: dict) -> str:
     """
     GPT用のプロンプト文を構成（PFC実績・目標・体重データ含む）
     """
-    # 食事（meal_with_basis）の整形
     meal = meal_data["data"][0]  # 1日分のみ前提
     actual = meal.get("actual", {})
     target = meal.get("target", {})
 
-    # 体重（anthropometric）の整形
     weight = body_data["data"][0].get("weight") if body_data.get("data") else None
 
     prompt = (
@@ -45,24 +43,23 @@ def generate_advice_for_unreplied():
         print("✅ 未返信リクエストはありません。")
         return
 
-    access_token = refresh_access_token()
-
     for req in requests:
         print(f"🎯 処理中 user_id={req.user_id} timestamp={req.timestamp}")
 
-        # Calomeal用の日付（yyyy-mm-dd）
+        # Calomeal APIは YYYY/MM/DD 形式
         dt = datetime.fromisoformat(req.timestamp)
-        date_str = dt.strftime("%Y-%m-%d")
+        date_str = dt.strftime("%Y/%m/%d")
 
         try:
-            meal_data = get_meal_with_basis(access_token, date_str, date_str)
-            body_data = get_anthropometric_data(access_token, date_str, date_str)
+            # user_id を直接渡す
+            meal_data = get_meal_with_basis(req.user_id, date_str, date_str)
+            body_data = get_anthropometric_data(req.user_id, date_str, date_str)
 
             prompt = format_prompt(meal_data, body_data)
             advice_text = generate_advice_by_prompt(prompt)
 
             update_advice_text(req.user_id, req.timestamp, advice_text)
-            time.sleep(1)  # API過負荷防止のため小休止（任意）
+            time.sleep(1)  # API過負荷防止のため小休止
 
         except Exception as e:
             print(f"❌ {req.user_id} のアドバイス生成失敗:", e)
