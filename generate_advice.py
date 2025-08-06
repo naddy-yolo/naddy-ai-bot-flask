@@ -11,15 +11,22 @@ def format_prompt(meal_data: dict, body_data: dict) -> str:
     GPT用のプロンプト文を構成（PFC実績・目標・体重データ含む）
     Calomeal APIの現行レスポンス構造に対応
     """
-    # meal_with_basis 構造から取得
-    meal = meal_data.get("meal_with_basis", [])[0] if meal_data.get("meal_with_basis") else {}
-    actual = meal.get("meal_histories_summary", {}).get("all", {})  # 実績値
-    target = meal.get("basis", {}).get("all", {})  # 目標値
+    # meal_with_basisの配列取得
+    meal_list = meal_data.get("result", {}).get("meal_with_basis", [])
+    if not meal_list:
+        raise ValueError("meal_with_basis データが存在しません")
+    meal = meal_list[0]
 
-    # 体重データ
+    # 実績値（meal_histories_summary）
+    actual = meal.get("meal_histories_summary", {}).get("all", {})
+    # 目標値（basis）
+    target = meal.get("basis", {}).get("all", {})
+
+    # 体重データの取得
+    body_list = body_data.get("result", [])
     weight = None
-    if body_data.get("data"):
-        weight = body_data["data"][0].get("weight")
+    if body_list and isinstance(body_list, list):
+        weight = body_list[0].get("weight")
 
     prompt = (
         f"昨日の食事の栄養バランスについてアドバイスをください。\n\n"
@@ -41,7 +48,8 @@ def format_prompt(meal_data: dict, body_data: dict) -> str:
 
 def generate_advice_for_unreplied():
     """
-    未返信のユーザーリクエストに対して、CalomealデータからGPTでアドバイス生成＆保存
+    未返信のユーザーリクエストに対して、
+    CalomealデータからGPTでアドバイス生成＆保存
     """
     requests = get_unreplied_requests()
     if not requests:
