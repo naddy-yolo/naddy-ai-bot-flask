@@ -26,6 +26,7 @@ http_client = SyncHttpxClientWrapper(
     follow_redirects=True,
 )
 
+
 def classify_request_type(message_text: str) -> str:
     """
     ユーザーの自由入力メッセージから request_type を自動判別する。
@@ -81,3 +82,38 @@ def classify_request_type(message_text: str) -> str:
         print("📛 スタックトレース:")
         traceback.print_exc()
         return "other"
+
+
+def generate_advice_by_prompt(prompt: str) -> str:
+    """
+    ナディ式テンプレで構成したプロンプトを元に、GPTからアドバイス文を生成
+    """
+    try:
+        print("🧠 generate_advice_by_prompt 開始")
+        client = OpenAI(http_client=http_client)
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "あなたはプロの女性向けダイエット指導者です。"
+                        "体重やPFCバランス、栄養傾向を見て、"
+                        "前向きかつ丁寧で信頼感のあるフィードバックを返してください。"
+                    )
+                },
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=500,
+        )
+
+        advice = response.choices[0].message.content.strip()
+        print("✅ アドバイス生成成功")
+        return advice
+
+    except Exception as e:
+        print("❌ アドバイス生成エラー:", e)
+        traceback.print_exc()
+        return "アドバイスの生成に失敗しました。"
