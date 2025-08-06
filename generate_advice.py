@@ -9,25 +9,30 @@ import time
 def format_prompt(meal_data: dict, body_data: dict) -> str:
     """
     GPT用のプロンプト文を構成（PFC実績・目標・体重データ含む）
+    Calomeal APIの現行レスポンス構造に対応
     """
-    meal = meal_data["data"][0]  # 1日分のみ前提
-    actual = meal.get("actual", {})
-    target = meal.get("target", {})
+    # meal_with_basis 構造から取得
+    meal = meal_data.get("meal_with_basis", [])[0] if meal_data.get("meal_with_basis") else {}
+    actual = meal.get("meal_histories_summary", {}).get("all", {})  # 実績値
+    target = meal.get("basis", {}).get("all", {})  # 目標値
 
-    weight = body_data["data"][0].get("weight") if body_data.get("data") else None
+    # 体重データ
+    weight = None
+    if body_data.get("data"):
+        weight = body_data["data"][0].get("weight")
 
     prompt = (
         f"昨日の食事の栄養バランスについてアドバイスをください。\n\n"
         f"【実績】\n"
         f"たんぱく質：{actual.get('protein')}g\n"
-        f"脂質：{actual.get('fat')}g\n"
+        f"脂質：{actual.get('lipid')}g\n"
         f"炭水化物：{actual.get('carbohydrate')}g\n"
-        f"カロリー：{actual.get('calories')}kcal\n\n"
+        f"カロリー：{actual.get('calorie')}kcal\n\n"
         f"【目標】\n"
         f"たんぱく質：{target.get('protein')}g\n"
-        f"脂質：{target.get('fat')}g\n"
+        f"脂質：{target.get('lipid')}g\n"
         f"炭水化物：{target.get('carbohydrate')}g\n"
-        f"カロリー：{target.get('calories')}kcal\n\n"
+        f"カロリー：{target.get('calorie')}kcal\n\n"
         f"【体重】\n{weight}kg\n\n"
         f"指導者として、丁寧で前向きなアドバイスをお願いします。"
     )
