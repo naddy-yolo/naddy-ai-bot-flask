@@ -6,7 +6,7 @@ from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis_hybrid
 )
-from utils.db import save_request, update_request_with_advice, init_db, get_db_session
+from utils.db import save_request, update_request_with_advice, init_db
 from utils.gpt_utils import (
     classify_request_type,
     generate_meal_advice,
@@ -15,8 +15,8 @@ from utils.gpt_utils import (
     generate_other_reply
 )
 
-# ✅ 本番Renderでも確実に初期化されるようにFlaskインスタンス作成前に呼び出す
-init_db()
+# ✅ DB初期化 & エンジン取得
+engine = init_db()
 
 app = Flask(__name__)
 
@@ -200,11 +200,10 @@ def debug_requests():
     DBに保存されている最新のリクエスト（アドバイス）を確認
     """
     try:
-        session = get_db_session()
-        rows = session.execute(
-            text("SELECT id, user_id, advice_text, status, created_at FROM requests ORDER BY id DESC LIMIT 5")
-        ).mappings().all()
-        session.close()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT id, user_id, advice_text, status, created_at FROM requests ORDER BY id DESC LIMIT 5")
+            ).mappings().all()
 
         return jsonify([dict(row) for row in rows]), 200
     except Exception as e:
