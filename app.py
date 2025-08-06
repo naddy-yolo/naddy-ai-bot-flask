@@ -1,5 +1,4 @@
 from flask import Flask, jsonify, request
-import os
 import requests
 from datetime import datetime
 from utils.caromil import (
@@ -18,23 +17,27 @@ app = Flask(__name__)
 def index():
     return "Flask app is running!"
 
+
 @app.route('/test-caromil', methods=["POST"])
 def test_caromil():
+    """
+    DBベースのトークン管理を利用して /api/anthropometric を叩く
+    必須: user_id, start_date, end_date
+    """
     try:
-        access_token = os.getenv("CAROMIL_ACCESS_TOKEN")
-        if not access_token:
-            raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
-
         data = request.get_json(force=True)
+        user_id = data.get("user_id")
         start_date = data.get("start_date")
         end_date = data.get("end_date")
         unit = data.get("unit", "day")
 
+        if not user_id:
+            raise Exception("user_id は必須です")
         if not start_date or not end_date:
             raise Exception("start_date, end_date は必須です")
 
         result = get_anthropometric_data(
-            access_token=access_token,
+            user_id=user_id,
             start_date=start_date,
             end_date=end_date,
             unit=unit
@@ -46,12 +49,21 @@ def test_caromil():
         print("❌ Error in /test-caromil:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
 
-@app.route("/test-userinfo", methods=["GET"])
+
+@app.route("/test-userinfo", methods=["POST"])
 def test_userinfo():
+    """
+    DBベースのトークン管理を利用して /api/user_info を叩く
+    必須: user_id
+    """
     try:
-        access_token = os.getenv("CAROMIL_ACCESS_TOKEN")
-        if not access_token:
-            raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
+        data = request.get_json(force=True)
+        user_id = data.get("user_id")
+        if not user_id:
+            raise Exception("user_id は必須です")
+
+        from utils.caromil import get_access_token
+        access_token = get_access_token(user_id)
 
         url = "https://test-connect.calomeal.com/api/user_info"
         headers = {
@@ -73,26 +85,31 @@ def test_userinfo():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
+
 @app.route('/test-meal-basis', methods=["POST"])
 def test_meal_basis():
+    """
+    DBベースのトークン管理を利用して /api/meal_with_basis を叩く
+    必須: user_id, start_date, end_date
+    """
     try:
-        access_token = os.getenv("CAROMIL_ACCESS_TOKEN")
-        if not access_token:
-            raise Exception("CAROMIL_ACCESS_TOKEN が設定されていません")
-
         data = request.get_json(force=True)
+        user_id = data.get("user_id")
         start_date = data.get("start_date")
         end_date = data.get("end_date")
 
+        if not user_id:
+            raise Exception("user_id は必須です")
         if not start_date or not end_date:
             raise Exception("start_date, end_date は必須です")
 
-        result = get_meal_with_basis(access_token, start_date, end_date)
+        result = get_meal_with_basis(user_id, start_date, end_date)
         return jsonify({"status": "ok", "result": result})
 
     except Exception as e:
         print("❌ Error in /test-meal-basis:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
+
 
 @app.route("/callback")
 def callback():
@@ -107,6 +124,7 @@ def callback():
         """
     else:
         return "❌ 認証コード（code）が見つかりませんでした", 400
+
 
 @app.route('/receive-request', methods=["POST"])
 def receive_request():
@@ -157,6 +175,7 @@ def receive_request():
     except Exception as e:
         print("❌ Error in /receive-request:", str(e))
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True)
