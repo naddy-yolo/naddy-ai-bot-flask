@@ -1,11 +1,12 @@
 from flask import Flask, jsonify, request
 import requests
 from datetime import datetime
+from sqlalchemy import text
 from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis_hybrid
 )
-from utils.db import save_request, update_request_with_advice, init_db
+from utils.db import save_request, update_request_with_advice, init_db, get_db_session
 from utils.gpt_utils import (
     classify_request_type,
     generate_meal_advice,
@@ -188,6 +189,26 @@ def receive_request():
     except Exception as e:
         print("❌ Error in /receive-request:", str(e))
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ==============================
+# デバッグ用: 最新アドバイス確認
+# ==============================
+@app.route("/debug-requests", methods=["GET"])
+def debug_requests():
+    """
+    DBに保存されている最新のリクエスト（アドバイス）を確認
+    """
+    try:
+        session = get_db_session()
+        rows = session.execute(
+            text("SELECT id, user_id, advice_text, status, created_at FROM requests ORDER BY id DESC LIMIT 5")
+        ).mappings().all()
+        session.close()
+
+        return jsonify([dict(row) for row in rows]), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
