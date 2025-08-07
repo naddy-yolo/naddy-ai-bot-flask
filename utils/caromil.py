@@ -1,13 +1,10 @@
-import os
 import requests
 from datetime import datetime, timedelta
 from dateutil import parser  # pip install python-dateutil
 import pytz  # pip install pytz
-from utils.db import get_tokens, update_tokens
 
-# 固定値（Render環境変数から取得）
-CLIENT_ID = os.environ.get("CAROMIL_CLIENT_ID")
-CLIENT_SECRET = os.environ.get("CAROMIL_CLIENT_SECRET")
+from utils.db import get_tokens, update_tokens
+from utils.env_utils import CALOMEAL_CLIENT_ID, CALOMEAL_CLIENT_SECRET
 
 # カロミルAPIエンドポイント
 TOKEN_URL = "https://test-connect.calomeal.com/auth/accesstoken"
@@ -17,9 +14,7 @@ MEAL_BASIS_URL = "https://test-connect.calomeal.com/api/meal_with_basis"
 
 def to_slash_date(date_str: str) -> str:
     """YYYY-MM-DD → YYYY/MM/DD に変換"""
-    if "-" in date_str:
-        return date_str.replace("-", "/")
-    return date_str
+    return date_str.replace("-", "/") if "-" in date_str else date_str
 
 
 def get_access_token(user_id: str) -> str:
@@ -32,15 +27,14 @@ def get_access_token(user_id: str) -> str:
     if isinstance(expires_at, str):
         expires_at = parser.parse(expires_at)
 
-    # 期限内ならそのまま返す
     if datetime.utcnow() < (expires_at - timedelta(minutes=1)):
         return token_data.access_token
 
     # refresh_tokenで更新
     data = {
         "grant_type": "refresh_token",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
+        "client_id": CALOMEAL_CLIENT_ID,
+        "client_secret": CALOMEAL_CLIENT_SECRET,
         "refresh_token": token_data.refresh_token,
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -129,7 +123,6 @@ def get_meal_with_basis_hybrid(user_id: str):
     """
     昨日〜今日の2日分を取得し、JST時刻に応じて1日分だけ返す
     JST 5時までは前日、それ以降は当日
-    ※日付フォーマットの違いにも対応
     """
     jst = pytz.timezone("Asia/Tokyo")
     now_jst = datetime.now(jst)
@@ -137,7 +130,6 @@ def get_meal_with_basis_hybrid(user_id: str):
     today = now_jst.date()
     yesterday = today - timedelta(days=1)
 
-    # 2日分取得
     raw_data = get_meal_with_basis(
         user_id,
         start_date=yesterday.strftime("%Y/%m/%d"),
@@ -146,12 +138,10 @@ def get_meal_with_basis_hybrid(user_id: str):
 
     print("📦 meal_with_basis APIレスポンス:", raw_data)
 
-    # 対象日決定
     target_date = yesterday if now_jst.hour < 5 else today
-    target_date_str1 = target_date.strftime("%Y-%m-%d")  # ハイフン区切り
-    target_date_str2 = target_date.strftime("%Y/%m/%d")  # スラッシュ区切り
+    target_date_str1 = target_date.strftime("%Y-%m-%d")
+    target_date_str2 = target_date.strftime("%Y/%m/%d")
 
-    # APIレスポンスの日付形式に合わせて比較
     filtered_data = [
         entry for entry in raw_data.get("meal_with_basis", raw_data.get("result", []))
         if entry.get("date") in (target_date_str1, target_date_str2)

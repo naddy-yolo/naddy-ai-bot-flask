@@ -1,21 +1,19 @@
 from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import os
 from datetime import datetime
 
-# 環境変数からPostgreSQL接続URL取得
-DATABASE_URL = os.environ.get("POSTGRES_URL")
+# ✅ POSTGRES_URL に統一して読み込む
+from utils.env_utils import POSTGRES_URL
 
-# エンジン・セッション初期化
-engine = create_engine(DATABASE_URL)
+# ✅ SQLAlchemy エンジン・セッション初期化
+engine = create_engine(POSTGRES_URL)
 SessionLocal = sessionmaker(bind=engine)
 
-# ベースクラス定義
 Base = declarative_base()
 
 # =========================
-# リクエストテーブル定義
+# requests テーブル定義
 # =========================
 class Request(Base):
     __tablename__ = "requests"
@@ -26,35 +24,29 @@ class Request(Base):
     timestamp = Column(String)
     request_type = Column(String)
     status = Column(String, default="未返信")
-    advice_text = Column(Text)  # アドバイス文（任意）
-
+    advice_text = Column(Text)
 
 # =========================
-# トークンテーブル定義
+# tokens テーブル定義
 # =========================
 class Token(Base):
     __tablename__ = "tokens"
 
-    user_id = Column(String, primary_key=True)           # LINEユーザーIDなど
-    access_token = Column(Text, nullable=False)          # Calomeal APIアクセストークン
-    refresh_token = Column(Text, nullable=False)         # Calomeal APIリフレッシュトークン
-    expires_at = Column(TIMESTAMP, nullable=False)       # アクセストークンの有効期限
-
+    user_id = Column(String, primary_key=True)
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=False)
+    expires_at = Column(TIMESTAMP, nullable=False)
 
 # =========================
-# テーブル初期化関数
+# 初期化関数
 # =========================
 def init_db():
     Base.metadata.create_all(bind=engine)
 
-
 # =========================
-# requests テーブル用関数
+# requests 関連関数
 # =========================
 def save_request(data: dict) -> int:
-    """
-    新規リクエストを保存し、そのレコードIDを返す
-    """
     session = SessionLocal()
     try:
         request = Request(
@@ -66,14 +58,12 @@ def save_request(data: dict) -> int:
         )
         session.add(request)
         session.commit()
-        session.refresh(request)  # INSERT後のIDを取得
+        session.refresh(request)
         return request.id
     finally:
         session.close()
 
-
 def get_unreplied_requests():
-    """status='未返信' かつ advice_text がNULLのリクエストを全件取得"""
     session = SessionLocal()
     try:
         return session.query(Request)\
@@ -83,9 +73,7 @@ def get_unreplied_requests():
     finally:
         session.close()
 
-
 def update_advice_text(user_id: str, timestamp: str, advice_text: str):
-    """指定ユーザー＆日時のリクエストに advice_text を追記"""
     session = SessionLocal()
     try:
         request = session.query(Request)\
@@ -101,11 +89,7 @@ def update_advice_text(user_id: str, timestamp: str, advice_text: str):
     finally:
         session.close()
 
-
 def update_request_with_advice(request_id: int, advice_text: str, status: str = "未返信"):
-    """
-    request_id を指定して advice_text と status を更新する
-    """
     session = SessionLocal()
     try:
         request = session.query(Request).filter(Request.id == request_id).first()
@@ -119,21 +103,17 @@ def update_request_with_advice(request_id: int, advice_text: str, status: str = 
     finally:
         session.close()
 
-
 # =========================
-# tokens テーブル用関数
+# tokens 関連関数
 # =========================
 def get_tokens(user_id: str):
-    """指定ユーザーのトークン情報を取得"""
     session = SessionLocal()
     try:
         return session.query(Token).filter(Token.user_id == user_id).first()
     finally:
         session.close()
 
-
 def save_tokens(user_id: str, access_token: str, refresh_token: str, expires_at: datetime):
-    """新規ユーザーのトークンを保存（存在しなければ追加）"""
     session = SessionLocal()
     try:
         token = Token(
@@ -147,9 +127,7 @@ def save_tokens(user_id: str, access_token: str, refresh_token: str, expires_at:
     finally:
         session.close()
 
-
 def update_tokens(user_id: str, access_token: str, refresh_token: str, expires_at: datetime):
-    """既存ユーザーのトークンを更新"""
     session = SessionLocal()
     try:
         token = session.query(Token).filter(Token.user_id == user_id).first()
@@ -159,7 +137,6 @@ def update_tokens(user_id: str, access_token: str, refresh_token: str, expires_a
             token.expires_at = expires_at
             session.commit()
         else:
-            # 存在しない場合は新規作成
             save_tokens(user_id, access_token, refresh_token, expires_at)
     finally:
         session.close()
