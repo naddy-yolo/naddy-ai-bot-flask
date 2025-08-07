@@ -25,23 +25,25 @@ def format_prompt(meal_data: dict, body_data: dict) -> str:
     # 体重データの取得
     body_list = body_data.get("result", [])
     weight = None
-    if body_list and isinstance(body_list, list):
+    if body_list and isinstance(body_list, list) and len(body_list) > 0:
         weight = body_list[0].get("weight")
 
+    # プロンプトの組み立て
     prompt = (
-        f"昨日の食事の栄養バランスについてアドバイスをください。\n\n"
-        f"【実績】\n"
-        f"たんぱく質：{actual.get('protein')}g\n"
-        f"脂質：{actual.get('lipid')}g\n"
-        f"炭水化物：{actual.get('carbohydrate')}g\n"
-        f"カロリー：{actual.get('calorie')}kcal\n\n"
-        f"【目標】\n"
-        f"たんぱく質：{target.get('protein')}g\n"
-        f"脂質：{target.get('lipid')}g\n"
-        f"炭水化物：{target.get('carbohydrate')}g\n"
-        f"カロリー：{target.get('calorie')}kcal\n\n"
-        f"【体重】\n{weight}kg\n\n"
-        f"指導者として、丁寧で前向きなアドバイスをお願いします。"
+        f"昨日の食事の栄養バランスについて、実績と目標の差を踏まえたアドバイスを作成してください。\n\n"
+        f"【実績（実際に摂取した量）】\n"
+        f"たんぱく質：{actual.get('protein', '不明')}g\n"
+        f"脂質：{actual.get('lipid', '不明')}g\n"
+        f"炭水化物：{actual.get('carbohydrate', '不明')}g\n"
+        f"カロリー：{actual.get('calorie', '不明')}kcal\n\n"
+        f"【目標（アプリに設定された値）】\n"
+        f"たんぱく質：{target.get('protein', '不明')}g\n"
+        f"脂質：{target.get('lipid', '不明')}g\n"
+        f"炭水化物：{target.get('carbohydrate', '不明')}g\n"
+        f"カロリー：{target.get('calorie', '不明')}kcal\n\n"
+        f"【体重】\n{weight or '不明'}kg\n\n"
+        f"● 実績と目標の差をもとに、「良い点」と「改善提案」に分けてください。\n"
+        f"● 食事のデータ以外に仮定は加えず、実績ベースで丁寧かつ前向きなアドバイスをしてください。"
     )
     return prompt
 
