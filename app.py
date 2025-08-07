@@ -3,7 +3,7 @@ import requests
 from datetime import datetime
 from utils.caromil import (
     get_anthropometric_data,
-    get_meal_with_basis_hybrid
+    get_meal_with_basis
 )
 from utils.db import (
     save_request,
@@ -168,7 +168,7 @@ def receive_request():
         # タイプ別アドバイス生成
         advice_text = None
         if request_type == "meal_feedback":
-            meal_data = get_meal_with_basis_hybrid(user_id)
+            meal_data = get_meal_with_basis(user_id, timestamp_str[:10], timestamp_str[:10])
             body_data = get_anthropometric_data(
                 user_id,
                 start_date=timestamp_str[:10],
