@@ -5,7 +5,13 @@ from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis_hybrid
 )
-from utils.db import save_request, update_request_with_advice, init_db
+from utils.db import (
+    save_request,
+    update_request_with_advice,
+    init_db,
+    SessionLocal,
+    Request
+)
 from utils.gpt_utils import (
     classify_request_type,
     generate_meal_advice,
@@ -14,7 +20,7 @@ from utils.gpt_utils import (
     generate_other_reply
 )
 
-# ✅ 本番Renderでも確実に初期化されるようにFlaskインスタンス作成前に呼び出す
+# ✅ DB初期化
 init_db()
 
 app = Flask(__name__)
@@ -151,7 +157,7 @@ def receive_request():
         # メッセージ分類
         request_type = classify_request_type(message_text)
 
-        # まずリクエストをDBに保存し、そのIDを取得
+        # リクエスト保存
         request_id = save_request({
             "message": message_text,
             "timestamp": timestamp_str,
@@ -176,9 +182,9 @@ def receive_request():
         else:
             advice_text = generate_other_reply(message_text)
 
-        # アドバイスをDBに更新（statusは未返信）
+        # アドバイスをDBに更新
         if advice_text:
-            print("🔍 生成されたアドバイス内容:", advice_text)  # ← 追加
+            print("🔍 生成されたアドバイス内容:", advice_text)
             update_request_with_advice(request_id, advice_text, status="未返信")
 
         return jsonify({
@@ -189,6 +195,36 @@ def receive_request():
     except Exception as e:
         print("❌ Error in /receive-request:", str(e))
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ✅ 新規追加：Streamlit管理画面用の未返信取得エンドポイント
+@app.route("/get-unreplied", methods=["GET"])
+def get_unreplied():
+    session = SessionLocal()
+    try:
+        requests = session.query(Request)\
+            .filter(Request.status == "未返信")\
+            .order_by(Request.timestamp.desc())\
+            .limit(20)\
+            .all()
+
+        data = [
+            {
+                "id": r.id,
+                "user_id": r.user_id,
+                "message": r.message,
+                "request_type": r.request_type,
+                "timestamp": r.timestamp,
+                "advice_text": r.advice_text,
+            }
+            for r in requests
+        ]
+
+        return jsonify({"status": "ok", "data": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        session.close()
 
 
 if __name__ == '__main__':
