@@ -13,12 +13,10 @@ MEAL_BASIS_URL = "https://test-connect.calomeal.com/api/meal_with_basis"
 
 
 def to_slash_date(date_str: str) -> str:
-    """YYYY-MM-DD → YYYY/MM/DD に変換"""
     return date_str.replace("-", "/") if "-" in date_str else date_str
 
 
 def get_access_token(user_id: str) -> str:
-    """DBから有効なアクセストークンを取得（期限切れならrefresh_tokenで更新）"""
     token_data = get_tokens(user_id)
     if not token_data:
         raise ValueError(f"❌ ユーザー {user_id} のトークンがDBに存在しません")
@@ -30,7 +28,6 @@ def get_access_token(user_id: str) -> str:
     if datetime.utcnow() < (expires_at - timedelta(minutes=1)):
         return token_data.access_token
 
-    # refresh_tokenで更新
     data = {
         "grant_type": "refresh_token",
         "client_id": CALOMEAL_CLIENT_ID,
@@ -55,7 +52,6 @@ def get_access_token(user_id: str) -> str:
 
 
 def get_anthropometric_data(user_id: str, start_date: str, end_date: str, unit: str = "day"):
-    """カロミルAPIから体重・体脂肪データを取得"""
     access_token = get_access_token(user_id)
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -88,7 +84,6 @@ def get_anthropometric_data(user_id: str, start_date: str, end_date: str, unit: 
 
 
 def get_meal_with_basis(user_id: str, start_date: str, end_date: str):
-    """カロミルAPIからPFC・カロリー・体重などを日別取得"""
     access_token = get_access_token(user_id)
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -104,7 +99,28 @@ def get_meal_with_basis(user_id: str, start_date: str, end_date: str):
 
     if response.status_code == 200:
         print("✅ meal_with_basis データ取得成功")
-        return response.json()
+        full_data = response.json()
+
+        # meal_with_basisのうち、最初の1日分のみ使用
+        meal_list = full_data.get("result", [])
+        if not meal_list:
+            raise ValueError("❌ meal_with_basis に日別データが含まれていません")
+
+        meal = meal_list[0]  # 最初の1日分を使用
+        actual = meal.get("meal_histories_summary", {}).get("all", {})
+        target = meal.get("basis", {}).get("all", {})
+
+        # PFCとカロリーだけ抽出
+        keys = ["calorie", "protein", "lipid", "carbohydrate"]
+        actual_clean = {k: actual.get(k) for k in keys}
+        target_clean = {k: target.get(k) for k in keys}
+
+        return {
+            "date": meal.get("date"),
+            "actual": actual_clean,
+            "target": target_clean
+        }
+
     elif response.status_code == 401:
         print("⚠️ アクセストークン期限切れ、更新します")
         access_token = get_access_token(user_id)
@@ -117,35 +133,3 @@ def get_meal_with_basis(user_id: str, start_date: str, end_date: str):
             raise Exception(f"再試行失敗: {retry_response.status_code} - {retry_response.text}")
     else:
         raise Exception(f"APIエラー: {response.status_code} - {response.text}")
-
-
-def get_meal_with_basis_hybrid(user_id: str):
-    """
-    昨日〜今日の2日分を取得し、JST時刻に応じて1日分だけ返す
-    JST 5時までは前日、それ以降は当日
-    """
-    jst = pytz.timezone("Asia/Tokyo")
-    now_jst = datetime.now(jst)
-
-    today = now_jst.date()
-    yesterday = today - timedelta(days=1)
-
-    raw_data = get_meal_with_basis(
-        user_id,
-        start_date=yesterday.strftime("%Y/%m/%d"),
-        end_date=today.strftime("%Y/%m/%d")
-    )
-
-    print("📦 meal_with_basis APIレスポンス:", raw_data)
-
-    target_date = yesterday if now_jst.hour < 5 else today
-    target_date_str1 = target_date.strftime("%Y-%m-%d")
-    target_date_str2 = target_date.strftime("%Y/%m/%d")
-
-    filtered_data = [
-        entry for entry in raw_data.get("meal_with_basis", raw_data.get("result", []))
-        if entry.get("date") in (target_date_str1, target_date_str2)
-    ]
-
-    print(f"🎯 ハイブリッド方式: {target_date_str2} のデータを返却（{len(filtered_data)}件）")
-    return filtered_data
