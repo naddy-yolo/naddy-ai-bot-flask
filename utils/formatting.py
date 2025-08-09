@@ -1,6 +1,6 @@
 # utils/formatting.py
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 
 MEAL_ORDER = ["morning", "noon", "night", "snack"]
 MEAL_LABEL = {
@@ -19,13 +19,6 @@ def _fmt_num(x: Optional[float], suffix: str = "", ndigits: int = 1) -> str:
         return "-"
 
 def _parse_date(date_str: str) -> str:
-    """
-    入力例:
-      - '2025-08-07'
-      - '2025/08/07'
-      - '2025-08-07T00:00:00+09:00'
-    出力: '2025/08/07'
-    """
     if not date_str:
         return ""
     core = date_str[:10]
@@ -34,121 +27,107 @@ def _parse_date(date_str: str) -> str:
             return datetime.strptime(core, fmt).strftime("%Y/%m/%d")
         except ValueError:
             continue
-    # ダメならそのまま返す
     return date_str
 
 def _date_key(s: str) -> str:
-    """比較用に 'YYYY-MM-DD' へ正規化"""
     if not s:
         return ""
-    core = s[:10].replace("/", "-")
-    return core
+    return s[:10].replace("/", "-")
 
 def _pick_anthro_for_date(anthro_json: Dict[str, Any], date_str: str) -> Dict[str, Optional[float]]:
-    """
-    anthropometric 側は通常:
-    { "data": [ {"date":"2025-08-07","weight":65.4,"fat":17.7}, ... ] }
-    だが、配列そのものが返る場合もあるため normalize 済みを想定。
-    """
     items = (anthro_json or {}).get("data") or []
     target = _date_key(date_str)
     for row in items:
         rdate = _date_key(str(row.get("date", "")))
         if rdate == target:
             return {"weight": row.get("weight"), "fat": row.get("fat")}
-    # 見つからなければ None
     return {"weight": None, "fat": None}
 
 def _collect_meals(meal_with_basis: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    meal_with_basis から meal_histories を取り出し、種類別にグループ化。
-    期待形:
-      meal_with_basis["meal_histories"] = [
-        {"meal_type":"morning","time":"08:00","name":"玄米ごはん",
-         "calorie":260,"protein":5.3,"fat":2.1,"carbohydrate":56.4,"image_url": "..."},
-        ...
-      ]
-    """
     grouped = {k: [] for k in MEAL_ORDER}
-    for item in (meal_with_basis or {}).get("meal_histories", []) or []:
-        mtype = (item.get("meal_type") or "").strip()
+    items = (meal_with_basis or {}).get("meal_histories") \
+        or (meal_with_basis or {}).get("meals") \
+        or (meal_with_basis or {}).get("records") \
+        or []
+    for item in items or []:
+        mtype = (item.get("meal_type") or item.get("type") or "").strip()
         if mtype in grouped:
             grouped[mtype].append(item)
     return grouped
 
 def _get_basis(meal_with_basis: Dict[str, Any]) -> Dict[str, Optional[float]]:
-    """
-    basis.all を想定:
-      meal_with_basis["basis"]["all"] = {calorie, protein, fat, carbohydrate}
-    """
-    allv = ((meal_with_basis or {}).get("basis") or {}).get("all") or {}
+    b = (meal_with_basis or {}).get("basis") or {}
+    allv = b.get("all") if isinstance(b.get("all"), dict) else b
+    # 代替キーも一応吸収
+    allv = allv or (meal_with_basis.get("goal") or meal_with_basis.get("targets") or {})
     return {
-        "calorie": allv.get("calorie"),
-        "protein": allv.get("protein"),
-        "fat": allv.get("fat"),
-        "carbohydrate": allv.get("carbohydrate"),
+        "calorie": allv.get("calorie") or allv.get("kcal"),
+        "protein": allv.get("protein") or allv.get("protein_g"),
+        "fat": allv.get("fat") or allv.get("fat_g"),
+        "carbohydrate": allv.get("carbohydrate") or allv.get("carb") or allv.get("carbs_g"),
     }
 
 def _get_summary(meal_with_basis: Dict[str, Any]) -> Dict[str, Optional[float]]:
-    """
-    meal_histories_summary.all を想定:
-      meal_with_basis["meal_histories_summary"]["all"] = {calorie, protein, fat, carbohydrate}
-    """
-    allv = ((meal_with_basis or {}).get("meal_histories_summary") or {}).get("all") or {}
+    s = (meal_with_basis or {}).get("meal_histories_summary") or {}
+    allv = s.get("all") if isinstance(s.get("all"), dict) else s
+    allv = allv or meal_with_basis.get("summary") or meal_with_basis.get("totals") or {}
     return {
-        "calorie": allv.get("calorie"),
+        "calorie": allv.get("calorie") or allv.get("kcal"),
         "protein": allv.get("protein"),
         "fat": allv.get("fat"),
-        "carbohydrate": allv.get("carbohydrate"),
+        "carbohydrate": allv.get("carbohydrate") or allv.get("carb") or allv.get("carbs"),
     }
 
 def _normalize_anthropometric(anthropometric: Any) -> Dict[str, Any]:
-    """
-    anthropometric が配列で返る場合に {"data": [...]} へ正規化。
-    それ以外はそのまま返す。
-    """
     if isinstance(anthropometric, list):
         return {"data": anthropometric}
     return anthropometric or {}
 
+def _unwrap_meal_container(obj: Union[dict, list]) -> Union[dict, list]:
+    """
+    Calomealが { "meal_with_basis": {... or [...] } の形で返すケースに対応。
+    ラッパーがあれば中身を返す。
+    """
+    if isinstance(obj, dict) and "meal_with_basis" in obj:
+        return obj.get("meal_with_basis")
+    return obj
+
 def _select_meal_object(meal_with_basis: Any, date_str: str) -> Dict[str, Any]:
     """
-    meal_with_basis が配列の場合、対象日(date_str)に一致する要素を選択。
-    一致キーは 'date' or 'target_date' を優先して探す。
-    一致が無ければ先頭要素、空なら {}。
-    辞書ならそのまま返す。
+    - ラッパー 'meal_with_basis' を剥がす
+    - 配列なら date/target_date が date_str に一致する要素を優先して選択
+    - 無ければ先頭、無ければ {}
+    - 辞書ならそのまま
     """
-    if isinstance(meal_with_basis, list):
-        if not meal_with_basis:
+    core = _unwrap_meal_container(meal_with_basis)
+
+    if isinstance(core, list):
+        if not core:
             return {}
         target = _date_key(date_str)
-        # まず date で厳密一致
-        for obj in meal_with_basis:
+        # date優先
+        for obj in core:
             day = _date_key(str(obj.get("date", "")))
             if day == target:
                 return obj
-        # 次に target_date でも一致を試す
-        for obj in meal_with_basis:
+        # target_dateでも試す
+        for obj in core:
             day = _date_key(str(obj.get("target_date", "")))
             if day == target:
                 return obj
-        # 見つからなければ先頭
-        return meal_with_basis[0]
-    return meal_with_basis or {}
+        return core[0]
+
+    if isinstance(core, dict):
+        return core or {}
+
+    # 想定外は空
+    return {}
 
 def format_daily_report(
     meal_with_basis: Any,
     anthropometric: Any,
     date_str: str
 ) -> str:
-    """
-    入力:
-      - meal_with_basis: /meal_with_basis のJSON（辞書 or 日別配列）
-      - anthropometric : /anthropometric のJSON（辞書 or 配列）
-      - date_str       : 'YYYY-MM-DD' or 'YYYY/MM/DD' or ISO8601
-    出力:
-      - 指定フォーマットのテキスト
-    """
     # 0) 正規化
     meal_obj = _select_meal_object(meal_with_basis, date_str)
     anth_obj = _normalize_anthropometric(anthropometric)
