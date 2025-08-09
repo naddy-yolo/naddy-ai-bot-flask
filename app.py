@@ -1,3 +1,4 @@
+# app.py
 from flask import Flask, jsonify, request
 import requests
 from datetime import datetime
@@ -174,7 +175,12 @@ def receive_request():
                 start_date=timestamp_str[:10],
                 end_date=timestamp_str[:10]
             )
-            advice_text = generate_meal_advice(meal_data, body_data)
+            # ★ 変更点：date_str を渡す
+            advice_text = generate_meal_advice(
+                meal_data=meal_data,
+                body_data=body_data,
+                date_str=timestamp_str[:10],
+            )
         elif request_type == "workout_question":
             advice_text = generate_workout_advice(message_text)
         elif request_type == "system_question":

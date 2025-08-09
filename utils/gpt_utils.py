@@ -1,14 +1,20 @@
+# utils/gpt_utils.py
 import os
 import traceback
 from openai import OpenAI
 from openai._base_client import SyncHttpxClientWrapper
+from utils.formatting import format_daily_report  # ★ 追加
 
 # 🔍 デバッグ用：コード内容表示（Render検証用）
 print("🔍 DEBUG: gpt_utils.py 現在のコード内容表示開始")
-with open(__file__, "r") as f:
-    lines = f.readlines()
-    for i, line in enumerate(lines[:30]):
-        print(f"{i+1:02d}: {line.rstrip()}")
+try:
+    with open(__file__, "r") as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines[:30]):
+            print(f"{i+1:02d}: {line.rstrip()}")
+except Exception as _e:
+    # 実行環境によっては __file__ を開けない場合があるため無視
+    pass
 print("🔍 DEBUG: gpt_utils.py 現在のコード内容表示終了")
 
 # ✅ proxy変数を削除（OpenAIエラー対策）
@@ -120,16 +126,28 @@ def generate_advice_by_prompt(prompt: str) -> str:
 # =====================================================
 # タイプ別アドバイス生成関数
 # =====================================================
-def generate_meal_advice(meal_data: dict, body_data: dict) -> str:
+def generate_meal_advice(meal_data: dict, body_data: dict, date_str: str) -> str:
     """
     食事データ（meal_with_basis）と体組成データ（anthropometric）から食事アドバイスを生成
+    - meal_data, body_data はAPIの生JSON
+    - date_str は 'YYYY-MM-DD' or 'YYYY/MM/DD'（/receive-request の timestamp から）
     """
+    # 整形テキストを作成（失敗時はフォールバックでJSON文字列を渡す）
+    try:
+        formatted = format_daily_report(meal_data, body_data, date_str)
+    except Exception as e:
+        print("⚠️ format_daily_report 失敗:", e)
+        formatted = (
+            "【注意】整形に失敗したためJSONを直接使用します。\n\n"
+            f"【食事データ(JSON)】\n{meal_data}\n\n"
+            f"【体重・体脂肪データ(JSON)】\n{body_data}\n"
+        )
+
     prompt = (
-        "以下はクライアントの食事記録と体重・体脂肪データです。\n"
-        "これを基にナディ式ダイエット指導のアドバイスを作成してください。\n"
-        "ポジティブなフィードバックと改善提案を含めてください。\n\n"
-        f"【食事データ】\n{meal_data}\n\n"
-        f"【体重・体脂肪データ】\n{body_data}\n"
+        "以下はクライアントの1日のデータです。"
+        "女性向けダイエット指導として、まず良かった点→次に改善点→最後に明日の具体アクションの順で、"
+        "簡潔かつ前向きにアドバイスしてください。\n\n"
+        f"{formatted}\n"
     )
     return generate_advice_by_prompt(prompt)
 
