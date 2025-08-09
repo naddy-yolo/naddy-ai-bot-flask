@@ -1,7 +1,9 @@
 # app.py
 from flask import Flask, jsonify, request
 import requests
+import os
 from datetime import datetime
+
 from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis
@@ -21,16 +23,37 @@ from utils.gpt_utils import (
     generate_other_reply
 )
 
+# ★ 追加
+from utils.formatting import format_daily_report
+from utils.line import send_line_message, LineSendError
+
 # ✅ DB初期化
 init_db()
 
 app = Flask(__name__)
 
+# ---------------------------
+# 管理API 用の簡易認証
+# ---------------------------
+def _require_admin():
+    """
+    管理APIの簡易認証。環境変数 ADMIN_TOKEN が設定されている場合のみ有効。
+    未設定ならチェックをスキップ（開発用）。
+    """
+    admin_token = os.getenv("ADMIN_TOKEN")
+    if not admin_token:
+        return None  # 認証スキップ
+    if request.headers.get("X-Admin-Token") != admin_token:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    return None
+
 @app.route('/')
 def index():
     return "Flask app is running!"
 
-
+# ---------------------------
+# 検証用エンドポイント
+# ---------------------------
 @app.route('/test-caromil', methods=["POST"])
 def test_caromil():
     try:
@@ -55,7 +78,6 @@ def test_caromil():
     except Exception as e:
         print("❌ Error in /test-caromil:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
-
 
 @app.route("/test-userinfo", methods=["POST"])
 def test_userinfo():
@@ -87,11 +109,9 @@ def test_userinfo():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
-
 @app.route('/test-meal-basis', methods=["POST"])
 def test_meal_basis():
     try:
-        from utils.caromil import get_meal_with_basis
         data = request.get_json(force=True)
         user_id = data.get("user_id")
         start_date = data.get("start_date")
@@ -108,7 +128,6 @@ def test_meal_basis():
         print("❌ Error in /test-meal-basis:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 400
 
-
 @app.route("/callback")
 def callback():
     code = request.args.get("code")
@@ -123,7 +142,9 @@ def callback():
     else:
         return "❌ 認証コード（code）が見つかりませんでした", 400
 
-
+# ---------------------------
+# LINE Webhook 受信
+# ---------------------------
 @app.route('/receive-request', methods=["POST"])
 def receive_request():
     try:
@@ -175,7 +196,6 @@ def receive_request():
                 start_date=timestamp_str[:10],
                 end_date=timestamp_str[:10]
             )
-            # ★ 変更点：date_str を渡す
             advice_text = generate_meal_advice(
                 meal_data=meal_data,
                 body_data=body_data,
@@ -202,13 +222,14 @@ def receive_request():
         print("❌ Error in /receive-request:", str(e))
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-
-# ✅ 新規追加：Streamlit管理画面用の未返信取得エンドポイント
+# ---------------------------
+# Streamlit用：未返信取得（既存）
+# ---------------------------
 @app.route("/get-unreplied", methods=["GET"])
 def get_unreplied():
     session = SessionLocal()
     try:
-        requests = session.query(Request)\
+        requests_q = session.query(Request)\
             .filter(Request.status == "未返信")\
             .order_by(Request.timestamp.desc())\
             .limit(20)\
@@ -223,7 +244,7 @@ def get_unreplied():
                 "timestamp": r.timestamp,
                 "advice_text": r.advice_text,
             }
-            for r in requests
+            for r in requests_q
         ]
 
         return jsonify({"status": "ok", "data": data})
@@ -232,6 +253,73 @@ def get_unreplied():
     finally:
         session.close()
 
+# ---------------------------
+# ★ 新規：整形レポート取得（MVP 1）
+# ---------------------------
+@app.route("/debug-formatted", methods=["GET"])
+def debug_formatted():
+    auth = _require_admin()
+    if auth:  # 認証エラー時はそのレスポンスを返す
+        return auth
+
+    try:
+        user_id = request.args.get("user_id")
+        date = request.args.get("date")  # YYYY-MM-DD
+        if not user_id or not date:
+            return jsonify({"status": "error", "message": "user_id, date は必須です"}), 400
+
+        meal = get_meal_with_basis(user_id, date, date)
+        body = get_anthropometric_data(user_id, date, date)
+        text = format_daily_report(meal, body, date)
+        return jsonify({"status": "ok", "text": text})
+    except Exception as e:
+        print("❌ Error in /debug-formatted:", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ---------------------------
+# ★ 新規：返信送信（MVP 2）
+# ---------------------------
+@app.route("/send-reply", methods=["POST"])
+def send_reply():
+    auth = _require_admin()
+    if auth:
+        return auth
+
+    session = SessionLocal()
+    try:
+        payload = request.get_json(force=True)
+        request_id = payload.get("request_id")
+        message_text = payload.get("message")
+
+        if not request_id or not message_text:
+            return jsonify({"status": "error", "message": "request_id, message は必須です"}), 400
+
+        # リクエスト取得
+        r = session.query(Request).filter(Request.id == request_id).first()
+        if not r:
+            return jsonify({"status": "error", "message": f"Request {request_id} が見つかりません"}), 404
+
+        # LINE送信
+        try:
+            send_line_message(r.user_id, message_text)
+        except LineSendError as e:
+            print("❌ LINE送信エラー:", e)
+            return jsonify({"status": "error", "message": f"LINE送信失敗: {e}"}), 502
+
+        # DB更新（返信済み & 本文を保存）
+        r.status = "返信済み"
+        r.advice_text = message_text  # 編集後本文で上書き
+        # sent_at カラムがあるなら:
+        # r.sent_at = datetime.utcnow()
+        session.commit()
+
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        session.rollback()
+        print("❌ Error in /send-reply:", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        session.close()
 
 if __name__ == '__main__':
     app.run(debug=True)
