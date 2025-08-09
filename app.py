@@ -23,7 +23,6 @@ from utils.gpt_utils import (
     generate_other_reply
 )
 
-# ★ 追加
 from utils.formatting import format_daily_report
 from utils.line import send_line_message, LineSendError
 
@@ -259,9 +258,8 @@ def get_unreplied():
 @app.route("/debug-formatted", methods=["GET"])
 def debug_formatted():
     auth = _require_admin()
-    if auth:  # 認証エラー時はそのレスポンスを返す
+    if auth:
         return auth
-
     try:
         user_id = request.args.get("user_id")
         date = request.args.get("date")  # YYYY-MM-DD
@@ -294,29 +292,77 @@ def send_reply():
         if not request_id or not message_text:
             return jsonify({"status": "error", "message": "request_id, message は必須です"}), 400
 
-        # リクエスト取得
         r = session.query(Request).filter(Request.id == request_id).first()
         if not r:
             return jsonify({"status": "error", "message": f"Request {request_id} が見つかりません"}), 404
 
-        # LINE送信
         try:
             send_line_message(r.user_id, message_text)
         except LineSendError as e:
             print("❌ LINE送信エラー:", e)
             return jsonify({"status": "error", "message": f"LINE送信失敗: {e}"}), 502
 
-        # DB更新（返信済み & 本文を保存）
         r.status = "返信済み"
-        r.advice_text = message_text  # 編集後本文で上書き
-        # sent_at カラムがあるなら:
-        # r.sent_at = datetime.utcnow()
+        r.advice_text = message_text
+        # r.sent_at = datetime.utcnow()  # もしカラムを追加したら
         session.commit()
 
         return jsonify({"status": "ok"})
     except Exception as e:
         session.rollback()
         print("❌ Error in /send-reply:", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        session.close()
+
+# ---------------------------
+# ★ 新規：サマリー＋アドバイス一括送信
+# ---------------------------
+@app.route("/send-summary-and-advice", methods=["POST"])
+def send_summary_and_advice():
+    auth = _require_admin()
+    if auth:
+        return auth
+
+    session = SessionLocal()
+    try:
+        payload = request.get_json(force=True)
+        request_id = payload.get("request_id")
+        date_str = payload.get("date")  # YYYY-MM-DD
+
+        if not request_id or not date_str:
+            return jsonify({"status": "error", "message": "request_id と date は必須です"}), 400
+
+        r = session.query(Request).filter(Request.id == request_id).first()
+        if not r:
+            return jsonify({"status": "error", "message": f"Request {request_id} が見つかりません"}), 404
+        if not r.user_id:
+            return jsonify({"status": "error", "message": "user_id が空のため送信できません"}), 400
+
+        meal = get_meal_with_basis(r.user_id, date_str, date_str)
+        body = get_anthropometric_data(r.user_id, date_str, date_str)
+        summary_text = format_daily_report(meal, body, date_str)
+
+        advice_text = (r.advice_text or "").strip()
+        message_text = (
+            f"【今日の食事まとめ】\n{summary_text}\n\n――――――\n【アドバイス】\n"
+            f"{advice_text if advice_text else '（未作成）'}"
+        )
+
+        try:
+            send_line_message(r.user_id, message_text)
+        except LineSendError as e:
+            print("❌ LINE送信エラー:", e)
+            return jsonify({"status": "error", "message": f"LINE送信失敗: {e}"}), 502
+
+        r.status = "返信済み"
+        r.advice_text = message_text  # 送信した最終本文で上書き
+        session.commit()
+
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        session.rollback()
+        print("❌ Error in /send-summary-and-advice:", e)
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         session.close()
