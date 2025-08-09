@@ -3,7 +3,7 @@ import os
 import traceback
 from openai import OpenAI
 from openai._base_client import SyncHttpxClientWrapper
-from utils.formatting import format_daily_report  # ★ 追加
+from utils.formatting import format_daily_report  # 整形関数
 
 # 🔍 デバッグ用：コード内容表示（Render検証用）
 print("🔍 DEBUG: gpt_utils.py 現在のコード内容表示開始")
@@ -124,7 +124,7 @@ def generate_advice_by_prompt(prompt: str) -> str:
 
 
 # =====================================================
-# タイプ別アドバイス生成関数
+# タイプ別アドバイス生成関数（キーdump追加版）
 # =====================================================
 def generate_meal_advice(meal_data: dict, body_data: dict, date_str: str) -> str:
     """
@@ -132,10 +132,58 @@ def generate_meal_advice(meal_data: dict, body_data: dict, date_str: str) -> str
     - meal_data, body_data はAPIの生JSON
     - date_str は 'YYYY-MM-DD' or 'YYYY/MM/DD'（/receive-request の timestamp から）
     """
+    # --- ここから形状ダンプ（一次調査用） ---
+    try:
+        # meal_with_basis：配列なら先頭を見る
+        md0 = meal_data[0] if isinstance(meal_data, list) and meal_data else meal_data
+        if isinstance(md0, dict):
+            print("🔑 meal_with_basis keys:", list(md0.keys())[:50])
+            print("🗓 meal_with_basis.date:", md0.get("date") or md0.get("target_date"))
+            # meals候補のキーの存在チェック（代表的な名前を走査）
+            for k in ("meal_histories", "meals", "records", "foods"):
+                if k in md0 and isinstance(md0[k], list):
+                    print(f"🍽 meals candidate '{k}' length:", len(md0[k]))
+                    if md0[k]:
+                        print(f"🍽 {k}[0] keys:", list(md0[k][0].keys())[:50])
+                    break
+            # basis/summary候補のキー存在チェック
+            if "basis" in md0:
+                print("🎯 basis keys:", list(md0["basis"].keys()))
+                if isinstance(md0["basis"].get("all"), dict):
+                    print("🎯 basis.all keys:", list(md0["basis"]["all"].keys()))
+            for k in ("goal", "targets", "summary", "totals", "meal_histories_summary"):
+                if k in md0:
+                    v = md0[k]
+                    print(f"🧭 '{k}' type:", type(v).__name__)
+                    if isinstance(v, dict):
+                        print(f"🧭 {k} keys:", list(v.keys())[:50])
+                        if k == "meal_histories_summary" and isinstance(v.get("all"), dict):
+                            print("🧭 meal_histories_summary.all keys:", list(v["all"].keys())[:50])
+        else:
+            print("⚠️ meal_with_basis is not dict-like:", type(md0).__name__)
+    except Exception as e:
+        print("⚠️ meal_with_basis keys dump失敗:", e)
+
+    try:
+        # anthropometric：配列なら data ラッパーに正規化している想定だが念のためdump
+        if isinstance(body_data, dict):
+            print("🔑 anthropometric wrapper keys:", list(body_data.keys())[:50])
+            if isinstance(body_data.get("data"), list) and body_data["data"]:
+                print("🔑 anthropometric[data][0] keys:", list(body_data["data"][0].keys())[:50])
+        elif isinstance(body_data, list):
+            print("🔑 anthropometric is list, length:", len(body_data))
+            if body_data:
+                print("🔑 anthropometric[0] keys:", list(body_data[0].keys())[:50])
+        else:
+            print("⚠️ anthropometric unexpected type:", type(body_data).__name__)
+    except Exception as e:
+        print("⚠️ anthropometric keys dump失敗:", e)
+    # --- ここまでダンプ ---
+
     # 整形テキストを作成（失敗時はフォールバックでJSON文字列を渡す）
     try:
         formatted = format_daily_report(meal_data, body_data, date_str)
-        # ★ テスト用に整形結果をログ出力
+        # テスト用に整形結果をログ出力
         print("📄 整形済みデータ:\n", formatted)
     except Exception as e:
         print("⚠️ format_daily_report 失敗:", e)
