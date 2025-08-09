@@ -1,6 +1,7 @@
 # utils/formatting.py
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Union
+import json  # ★ 文字列JSON対応で追加
 
 MEAL_ORDER = ["morning", "noon", "night", "snack"]
 MEAL_LABEL = {
@@ -83,21 +84,30 @@ def _normalize_anthropometric(anthropometric: Any) -> Dict[str, Any]:
         return {"data": anthropometric}
     return anthropometric or {}
 
-def _unwrap_meal_container(obj: Union[dict, list]) -> Union[dict, list]:
+def _unwrap_meal_container(obj: Union[dict, list, str]) -> Union[dict, list]:
     """
-    Calomealが { "meal_with_basis": {... or [...] } の形で返すケースに対応。
-    ラッパーがあれば中身を返す。
+    Calomealが { "meal_with_basis": {... or [...] } の形や
+    文字列JSONで返すケースに対応。ラッパーと文字列を処理。
     """
+    # ラッパー解除
     if isinstance(obj, dict) and "meal_with_basis" in obj:
-        return obj.get("meal_with_basis")
+        obj = obj.get("meal_with_basis")
+
+    # ★ 文字列JSONならパース
+    if isinstance(obj, str):
+        try:
+            obj = json.loads(obj)
+        except Exception:
+            # パース失敗ならそのまま返す（後段で空扱いに落ちる）
+            return obj
     return obj
 
 def _select_meal_object(meal_with_basis: Any, date_str: str) -> Dict[str, Any]:
     """
     - ラッパー 'meal_with_basis' を剥がす
-    - 配列なら date/target_date が date_str に一致する要素を優先して選択
+    - 文字列JSONなら辞書/配列へ
+    - 配列なら date/target_date が date_str に一致する要素を優先
     - 無ければ先頭、無ければ {}
-    - 辞書ならそのまま
     """
     core = _unwrap_meal_container(meal_with_basis)
 
@@ -105,12 +115,10 @@ def _select_meal_object(meal_with_basis: Any, date_str: str) -> Dict[str, Any]:
         if not core:
             return {}
         target = _date_key(date_str)
-        # date優先
         for obj in core:
             day = _date_key(str(obj.get("date", "")))
             if day == target:
                 return obj
-        # target_dateでも試す
         for obj in core:
             day = _date_key(str(obj.get("target_date", "")))
             if day == target:

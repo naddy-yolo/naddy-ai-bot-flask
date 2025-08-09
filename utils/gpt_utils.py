@@ -124,7 +124,7 @@ def generate_advice_by_prompt(prompt: str) -> str:
 
 
 # =====================================================
-# タイプ別アドバイス生成関数（キーdump追加版）
+# タイプ別アドバイス生成関数（キーdump＋失敗時のフォールバック出力あり）
 # =====================================================
 def generate_meal_advice(meal_data: dict, body_data: dict, date_str: str) -> str:
     """
@@ -132,21 +132,18 @@ def generate_meal_advice(meal_data: dict, body_data: dict, date_str: str) -> str
     - meal_data, body_data はAPIの生JSON
     - date_str は 'YYYY-MM-DD' or 'YYYY/MM/DD'（/receive-request の timestamp から）
     """
-    # --- ここから形状ダンプ（一次調査用） ---
+    # --- 形状ダンプ ---
     try:
-        # meal_with_basis：配列なら先頭を見る
         md0 = meal_data[0] if isinstance(meal_data, list) and meal_data else meal_data
         if isinstance(md0, dict):
             print("🔑 meal_with_basis keys:", list(md0.keys())[:50])
             print("🗓 meal_with_basis.date:", md0.get("date") or md0.get("target_date"))
-            # meals候補のキーの存在チェック（代表的な名前を走査）
             for k in ("meal_histories", "meals", "records", "foods"):
                 if k in md0 and isinstance(md0[k], list):
                     print(f"🍽 meals candidate '{k}' length:", len(md0[k]))
                     if md0[k]:
                         print(f"🍽 {k}[0] keys:", list(md0[k][0].keys())[:50])
                     break
-            # basis/summary候補のキー存在チェック
             if "basis" in md0:
                 print("🎯 basis keys:", list(md0["basis"].keys()))
                 if isinstance(md0["basis"].get("all"), dict):
@@ -165,7 +162,6 @@ def generate_meal_advice(meal_data: dict, body_data: dict, date_str: str) -> str
         print("⚠️ meal_with_basis keys dump失敗:", e)
 
     try:
-        # anthropometric：配列なら data ラッパーに正規化している想定だが念のためdump
         if isinstance(body_data, dict):
             print("🔑 anthropometric wrapper keys:", list(body_data.keys())[:50])
             if isinstance(body_data.get("data"), list) and body_data["data"]:
@@ -183,7 +179,6 @@ def generate_meal_advice(meal_data: dict, body_data: dict, date_str: str) -> str
     # 整形テキストを作成（失敗時はフォールバックでJSON文字列を渡す）
     try:
         formatted = format_daily_report(meal_data, body_data, date_str)
-        # テスト用に整形結果をログ出力
         print("📄 整形済みデータ:\n", formatted)
     except Exception as e:
         print("⚠️ format_daily_report 失敗:", e)
@@ -192,6 +187,8 @@ def generate_meal_advice(meal_data: dict, body_data: dict, date_str: str) -> str
             f"【食事データ(JSON)】\n{meal_data}\n\n"
             f"【体重・体脂肪データ(JSON)】\n{body_data}\n"
         )
+        # ★ 失敗時のフォールバックもログ出力
+        print("📄 整形フォールバック(JSONダンプ):\n", formatted)
 
     prompt = (
         "以下はクライアントの1日のデータです。"
