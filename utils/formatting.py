@@ -1,7 +1,7 @@
 # utils/formatting.py
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Union
-import json  # ★ 文字列JSON対応で追加
+import json
 
 MEAL_ORDER = ["morning", "noon", "night", "snack"]
 MEAL_LABEL = {
@@ -44,38 +44,111 @@ def _pick_anthro_for_date(anthro_json: Dict[str, Any], date_str: str) -> Dict[st
             return {"weight": row.get("weight"), "fat": row.get("fat")}
     return {"weight": None, "fat": None}
 
+def _hour_to_hhmm(hour_val: Any) -> str:
+    try:
+        h = int(hour_val)
+        if 0 <= h <= 23:
+            return f"{h:02d}:00"
+    except Exception:
+        pass
+    # 文字列ならそのまま軽く整える
+    s = str(hour_val).strip()
+    return s if s else "--:--"
+
 def _collect_meals(meal_with_basis: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Calomealの meal_histories は dict 形式：
+      {
+        "meal_histories": {
+          "morning": [ {menu_name, hour, calorie, protein, lipid, carbohydrate, has_image, image_url, ...}, ... ],
+          "noon":    [ ... ],
+          "night":   [ ... ],
+          "snack":   [ ... ]
+        }
+      }
+    旧仕様（list形式）の可能性もケアするが、まずは dict を優先
+    """
     grouped = {k: [] for k in MEAL_ORDER}
-    items = (meal_with_basis or {}).get("meal_histories") \
-        or (meal_with_basis or {}).get("meals") \
-        or (meal_with_basis or {}).get("records") \
-        or []
-    for item in items or []:
-        mtype = (item.get("meal_type") or item.get("type") or "").strip()
-        if mtype in grouped:
-            grouped[mtype].append(item)
+
+    # 候補を取得
+    mh = (meal_with_basis or {}).get("meal_histories")
+    if isinstance(mh, dict):
+        # dict 形式（本件の実レスポンス）
+        for mtype in MEAL_ORDER:
+            items = mh.get(mtype) or []
+            for it in items:
+                # キーを標準化
+                time = _hour_to_hhmm(it.get("hour"))
+                name = (it.get("menu_name") or it.get("name") or "").strip() or "(名称未設定)"
+                kcal = it.get("calorie")
+                protein = it.get("protein")
+                # 脂質は 'lipid' キー
+                fat = it.get("fat", it.get("lipid"))
+                carb = it.get("carbohydrate") or it.get("carb")
+                has_img = bool(it.get("has_image")) or bool((it.get("image_url") or "").strip())
+                image_url = (it.get("image_url") or "").strip()
+                grouped[mtype].append({
+                    "meal_type": mtype,
+                    "time": time,
+                    "name": name,
+                    "calorie": kcal,
+                    "protein": protein,
+                    "fat": fat,
+                    "carbohydrate": carb,
+                    "image_url": image_url if has_img else "",
+                })
+        return grouped
+
+    # フォールバック：list 形式（旧想定）
+    items = mh or (meal_with_basis or {}).get("meals") or (meal_with_basis or {}).get("records") or []
+    if isinstance(items, list):
+        for it in items:
+            mtype = (it.get("meal_type") or it.get("type") or "").strip()
+            if mtype in grouped:
+                # キー標準化（lipid→fat 等）
+                time = (it.get("time") or "").strip() or _hour_to_hhmm(it.get("hour"))
+                name = (it.get("menu_name") or it.get("name") or "").strip() or "(名称未設定)"
+                fat = it.get("fat", it.get("lipid"))
+                carb = it.get("carbohydrate") or it.get("carb")
+                has_img = bool(it.get("has_image")) or bool((it.get("image_url") or "").strip())
+                image_url = (it.get("image_url") or "").strip()
+                grouped[mtype].append({
+                    "meal_type": mtype,
+                    "time": time or "--:--",
+                    "name": name,
+                    "calorie": it.get("calorie"),
+                    "protein": it.get("protein"),
+                    "fat": fat,
+                    "carbohydrate": carb,
+                    "image_url": image_url if has_img else "",
+                })
     return grouped
 
 def _get_basis(meal_with_basis: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """
+    basis.all に PFC 目標。脂質は 'lipid' キー。
+    """
     b = (meal_with_basis or {}).get("basis") or {}
     allv = b.get("all") if isinstance(b.get("all"), dict) else b
-    # 代替キーも一応吸収
     allv = allv or (meal_with_basis.get("goal") or meal_with_basis.get("targets") or {})
     return {
         "calorie": allv.get("calorie") or allv.get("kcal"),
         "protein": allv.get("protein") or allv.get("protein_g"),
-        "fat": allv.get("fat") or allv.get("fat_g"),
+        "fat": allv.get("fat", allv.get("lipid")) or allv.get("fat_g"),
         "carbohydrate": allv.get("carbohydrate") or allv.get("carb") or allv.get("carbs_g"),
     }
 
 def _get_summary(meal_with_basis: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """
+    meal_histories_summary.all に当日合計。脂質は 'lipid' キー。
+    """
     s = (meal_with_basis or {}).get("meal_histories_summary") or {}
     allv = s.get("all") if isinstance(s.get("all"), dict) else s
     allv = allv or meal_with_basis.get("summary") or meal_with_basis.get("totals") or {}
     return {
         "calorie": allv.get("calorie") or allv.get("kcal"),
         "protein": allv.get("protein"),
-        "fat": allv.get("fat"),
+        "fat": allv.get("fat", allv.get("lipid")),
         "carbohydrate": allv.get("carbohydrate") or allv.get("carb") or allv.get("carbs"),
     }
 
@@ -86,28 +159,22 @@ def _normalize_anthropometric(anthropometric: Any) -> Dict[str, Any]:
 
 def _unwrap_meal_container(obj: Union[dict, list, str]) -> Union[dict, list]:
     """
-    Calomealが { "meal_with_basis": {... or [...] } の形や
-    文字列JSONで返すケースに対応。ラッパーと文字列を処理。
+    { "meal_with_basis": {... or [...] } や 文字列JSONを吸収
     """
-    # ラッパー解除
     if isinstance(obj, dict) and "meal_with_basis" in obj:
         obj = obj.get("meal_with_basis")
-
-    # ★ 文字列JSONならパース
     if isinstance(obj, str):
         try:
             obj = json.loads(obj)
         except Exception:
-            # パース失敗ならそのまま返す（後段で空扱いに落ちる）
             return obj
     return obj
 
 def _select_meal_object(meal_with_basis: Any, date_str: str) -> Dict[str, Any]:
     """
-    - ラッパー 'meal_with_basis' を剥がす
-    - 文字列JSONなら辞書/配列へ
-    - 配列なら date/target_date が date_str に一致する要素を優先
-    - 無ければ先頭、無ければ {}
+    - ラッパー解除
+    - 配列なら date/target_date で対象日優先、なければ先頭
+    - 辞書ならそのまま
     """
     core = _unwrap_meal_container(meal_with_basis)
 
@@ -128,7 +195,6 @@ def _select_meal_object(meal_with_basis: Any, date_str: str) -> Dict[str, Any]:
     if isinstance(core, dict):
         return core or {}
 
-    # 想定外は空
     return {}
 
 def format_daily_report(
@@ -187,8 +253,8 @@ def format_daily_report(
             lines.append("食事記録なし\n")
             continue
         for it in items:
-            time = (it.get("time") or "").strip() or "--:--"
-            name = (it.get("name") or "").strip() or "(名称未設定)"
+            time = (it.get("time") or "--:--").strip()
+            name = (it.get("name") or "(名称未設定)").strip()
             kcal = _fmt_num(it.get("calorie"), " kcal", 0)
             p = _fmt_num(it.get("protein"), "g", 1)
             fat = _fmt_num(it.get("fat"), "g", 1)
