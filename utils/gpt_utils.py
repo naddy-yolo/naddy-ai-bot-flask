@@ -135,6 +135,8 @@ def generate_meal_advice(meal_data: dict, body_data: dict, date_str: str) -> str
     # 整形テキストを作成（失敗時はフォールバックでJSON文字列を渡す）
     try:
         formatted = format_daily_report(meal_data, body_data, date_str)
+        # ★ テスト用に整形結果をログ出力
+        print("📄 整形済みデータ:\n", formatted)
     except Exception as e:
         print("⚠️ format_daily_report 失敗:", e)
         formatted = (
