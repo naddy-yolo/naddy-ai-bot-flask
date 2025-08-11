@@ -244,10 +244,10 @@ def receive_request():
         else:
             advice_text = generate_other_reply(message_text)
 
-        # アドバイスをDBに更新
+        # アドバイスをDBに更新（★ status を 'pending' に統一）
         if advice_text:
             print("🔍 生成されたアドバイス内容:", advice_text)
-            update_request_with_advice(request_id, advice_text, status="未返信")
+            update_request_with_advice(request_id, advice_text, status="pending")
 
         return jsonify({
             "status": "success",
@@ -285,7 +285,8 @@ def get_unreplied():
             ORDER BY r.timestamp DESC
             LIMIT 20
         """)
-        rows = session.execute(sql, {"status": "未返信"}).fetchall()
+        # ★ 'pending' だけを返す
+        rows = session.execute(sql, {"status": "pending"}).fetchall()
 
         data = []
         for row in rows:
@@ -362,7 +363,8 @@ def send_reply():
             print("❌ LINE送信エラー:", e)
             return jsonify({"status": "error", "message": f"LINE送信失敗: {e}"}), 502
 
-        r.status = "返信済み"
+        # ★ 'replied' に統一
+        r.status = "replied"
         r.advice_text = message_text
         # r.sent_at = datetime.utcnow()  # もしカラムを追加したら
         session.commit()
@@ -415,7 +417,8 @@ def send_summary_and_advice():
             print("❌ LINE送信エラー:", e)
             return jsonify({"status": "error", "message": f"LINE送信失敗: {e}"}), 502
 
-        r.status = "返信済み"
+        # ★ 'replied' に統一
+        r.status = "replied"
         r.advice_text = message_text  # 送信した最終本文で上書き
         session.commit()
 
@@ -424,6 +427,74 @@ def send_summary_and_advice():
         session.rollback()
         print("❌ Error in /send-summary-and-advice:", e)
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        session.close()
+
+# ---------------------------
+# ★ 新規：除外API（推奨：/update-status のラッパ）
+# ---------------------------
+@app.route("/update-status", methods=["POST"])
+def update_status():
+    auth = _require_admin()
+    if auth:
+        return auth
+
+    payload = request.get_json(force=True) or {}
+    try:
+        rid = int(payload.get("request_id", 0))
+    except Exception:
+        rid = 0
+    status = (payload.get("status") or "").strip()
+
+    if not rid or status not in {"pending", "replied", "ignored"}:
+        return jsonify({"status": "error", "error": "invalid request"}), 400
+
+    session = SessionLocal()
+    try:
+        r = session.query(Request).filter(Request.id == rid).first()
+        if not r:
+            return jsonify({"status": "error", "error": "not found"}), 404
+
+        r.status = status
+        session.commit()
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        session.rollback()
+        print("❌ Error in /update-status:", e)
+        return jsonify({"status": "error", "error": str(e)}), 500
+    finally:
+        session.close()
+
+@app.route("/discard-request", methods=["POST"])
+def discard_request():
+    """
+    互換エンドポイント。UIがまだ /discard-request を叩く場合のため。
+    内部的に 'ignored' へ更新する。
+    """
+    auth = _require_admin()
+    if auth:
+        return auth
+
+    payload = request.get_json(force=True) or {}
+    try:
+        rid = int(payload.get("request_id", 0))
+    except Exception:
+        rid = 0
+    if not rid:
+        return jsonify({"status": "error", "error": "invalid request"}), 400
+
+    session = SessionLocal()
+    try:
+        r = session.query(Request).filter(Request.id == rid).first()
+        if not r:
+            return jsonify({"status": "error", "error": "not found"}), 404
+        r.status = "ignored"
+        session.commit()
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        session.rollback()
+        print("❌ Error in /discard-request:", e)
+        return jsonify({"status": "error", "error": str(e)}), 500
     finally:
         session.close()
 
