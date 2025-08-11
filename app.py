@@ -4,6 +4,8 @@ import requests
 import os
 from datetime import datetime
 
+from sqlalchemy import text  # JOIN付き生SQLやUPSERTで使用
+
 from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis
@@ -24,7 +26,12 @@ from utils.gpt_utils import (
 )
 
 from utils.formatting import format_daily_report
-from utils.line import send_line_message, LineSendError
+from utils.line import (
+    send_line_message,
+    LineSendError,
+    get_line_profile,
+    LineProfileError,
+)
 
 # ✅ DB初期化
 init_db()
@@ -49,6 +56,25 @@ def _require_admin():
 @app.route('/')
 def index():
     return "Flask app is running!"
+
+# ---------------------------
+# users への名前UPSERTヘルパ
+# ---------------------------
+def upsert_user_name(user_id: str, name: str):
+    """
+    空文字では上書きしない（既存名を尊重）。
+    """
+    if not user_id:
+        return
+    with SessionLocal() as s:
+        s.execute(text("""
+            INSERT INTO users (user_id, name)
+            VALUES (:user_id, :name)
+            ON CONFLICT (user_id) DO UPDATE
+            SET name = COALESCE(NULLIF(:name, ''), users.name),
+                updated_at = NOW();
+        """), {"user_id": user_id, "name": name or ""})
+        s.commit()
 
 # ---------------------------
 # 検証用エンドポイント
@@ -175,6 +201,17 @@ def receive_request():
         timestamp_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
         user_id = event.get("source", {}).get("userId")
 
+        # ✅ プロフィール同期（表示名をusersへUPSERT）
+        if user_id:
+            try:
+                prof = get_line_profile(user_id)  # LINE APIから取得
+                display_name = prof.get("displayName") or ""
+                upsert_user_name(user_id, display_name)
+            except LineProfileError as e:
+                app.logger.warning(f"[profile-sync] {user_id}: {e}")
+            except Exception as e:
+                app.logger.exception(f"[profile-sync] unexpected error: {e}")
+
         # メッセージ分類
         request_type = classify_request_type(message_text)
 
@@ -222,32 +259,55 @@ def receive_request():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # ---------------------------
-# Streamlit用：未返信取得（既存）
+# Streamlit用：未返信取得（JOINで名前同梱）
 # ---------------------------
 @app.route("/get-unreplied", methods=["GET"])
 def get_unreplied():
+    auth = _require_admin()
+    if auth:
+        return auth
+
     session = SessionLocal()
     try:
-        requests_q = session.query(Request)\
-            .filter(Request.status == "未返信")\
-            .order_by(Request.timestamp.desc())\
-            .limit(20)\
-            .all()
+        # users を LEFT JOIN して user_name を同梱
+        sql = text("""
+            SELECT
+                r.id,
+                r.user_id,
+                COALESCE(u.name, '') AS user_name,
+                r.message,
+                r.request_type,
+                r.timestamp,
+                r.advice_text
+            FROM requests r
+            LEFT JOIN users u ON u.user_id = r.user_id
+            WHERE r.status = :status
+            ORDER BY r.timestamp DESC
+            LIMIT 20
+        """)
+        rows = session.execute(sql, {"status": "未返信"}).fetchall()
 
-        data = [
-            {
-                "id": r.id,
-                "user_id": r.user_id,
-                "message": r.message,
-                "request_type": r.request_type,
-                "timestamp": r.timestamp,
-                "advice_text": r.advice_text,
-            }
-            for r in requests_q
-        ]
+        data = []
+        for row in rows:
+            rid, user_id, user_name, message, req_type, ts, advice = row
+            # timestamp を ISO 文字列に統一
+            try:
+                ts_val = ts.isoformat()
+            except Exception:
+                ts_val = str(ts)
+            data.append({
+                "id": rid,
+                "user_id": user_id,
+                "user_name": user_name or "",
+                "message": message,
+                "request_type": req_type,
+                "timestamp": ts_val,
+                "advice_text": advice,
+            })
 
         return jsonify({"status": "ok", "data": data})
     except Exception as e:
+        print("❌ Error in /get-unreplied:", e)
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         session.close()
