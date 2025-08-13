@@ -1,0 +1,10 @@
+{
+  "events": [
+    {
+      "type": "message",
+      "message": { "type": "text", "text": "今日の食事を分析して" },
+      "timestamp": 1754967600000,
+      "source": { "userId": "U72a7f79cdca51f15e6536106d89c414f", "type": "user" }
+    }
+  ]
+}
