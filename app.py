@@ -750,7 +750,10 @@ def api_user_intake():
 # ---------------------------
 @app.post("/backfill-daily")
 def backfill_daily():
-    """指定ユーザーの指定期間を Calomeal から取得し、日次テーブルへUPSERTする"""
+    """指定ユーザーの指定期間を Calomeal から取得し、日次テーブルへUPSERTする
+       - 7日チャンクでCalomealに問い合わせ（長期間の500回避）
+       - 片方のAPIが失敗しても保存処理は継続
+    """
     auth = _require_admin()
     if auth:
         return auth
@@ -768,29 +771,47 @@ def backfill_daily():
         if e < s:
             return jsonify({"error": "invalid_date_range"}), 400
 
-        # まとめて取得（Calomeal側が期間取得対応ならAPIコールを節約）
-        body = get_anthropometric_data(uid, start_date=start, end_date=end)
-        meal = get_meal_with_basis(uid, start, end)
-
+        CHUNK_DAYS = 7
         rows_written = 0
         empty_days = 0
 
         dbs = SessionLocal()
         try:
-            d = s
-            while d <= e:
-                day = d.isoformat()
-                w, bf = _extract_body_for_day(body, day)
-                kcal, p, f, c = _extract_nutrition_for_day(meal, day)
+            cur = s
+            while cur <= e:
+                chunk_end = min(cur + timedelta(days=CHUNK_DAYS - 1), e)
+                sd, ed = cur.isoformat(), chunk_end.isoformat()
 
-                if (w is None and bf is None) and (kcal is None and p is None and f is None and c is None):
-                    empty_days += 1
-                else:
-                    upsert_metrics_daily(uid, d, w, bf, session=dbs)
-                    upsert_nutrition_daily(uid, d, kcal, p, f, c, session=dbs)
-                    rows_written += 1
+                body = None
+                meal = None
+                try:
+                    body = get_anthropometric_data(uid, start_date=sd, end_date=ed)
+                except Exception as be:
+                    app.logger.warning(f"[backfill-daily] anthropometric chunk fail {uid} {sd}..{ed}: {be}")
+                try:
+                    meal = get_meal_with_basis(uid, sd, ed)
+                except Exception as me:
+                    app.logger.warning(f"[backfill-daily] meal_with_basis chunk fail {uid} {sd}..{ed}: {me}")
 
-                d += timedelta(days=1)
+                d = cur
+                while d <= chunk_end:
+                    day = d.isoformat()
+                    try:
+                        w, bf = _extract_body_for_day(body, day) if body is not None else (None, None)
+                        kcal, p, f, c = _extract_nutrition_for_day(meal, day) if meal is not None else (None, None, None, None)
+
+                        # （空でも）両テーブルにUPSERTして updated_at を揃える
+                        upsert_metrics_daily(uid, d, w, bf, session=dbs)
+                        upsert_nutrition_daily(uid, d, kcal, p, f, c, session=dbs)
+
+                        rows_written += 1
+                        if w is None and kcal is None and p is None and f is None and c is None:
+                            empty_days += 1
+                    except Exception as de:
+                        app.logger.warning(f"[backfill-daily] save fail {uid} {day}: {de}")
+                    d += timedelta(days=1)
+
+                cur = chunk_end + timedelta(days=1)
 
             dbs.commit()
         except Exception:
