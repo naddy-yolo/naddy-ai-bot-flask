@@ -11,9 +11,12 @@ from sqlalchemy import func, or_, ARRAY
 # ✅ POSTGRES_URL に統一して読み込む
 from utils.env_utils import POSTGRES_URL
 
-# ✅ SQLAlchemy エンジン・セッション初期化
-engine = create_engine(POSTGRES_URL)
-SessionLocal = sessionmaker(bind=engine)
+# ✅ SQLAlchemy エンジン・セッション初期化（安定性&利便性UP）
+engine = create_engine(
+    POSTGRES_URL,
+    pool_pre_ping=True,   # 接続切れ対策
+)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 Base = declarative_base()
 
@@ -40,7 +43,7 @@ class Token(Base):
     user_id = Column(String, primary_key=True)
     access_token = Column(Text, nullable=False)
     refresh_token = Column(Text, nullable=False)
-    expires_at = Column(TIMESTAMP, nullable=False)
+    expires_at = Column(TIMESTAMP, nullable=False)  # 既存運用に合わせてnaiveのまま
 
 # =========================
 # user_profile モデル
@@ -230,51 +233,80 @@ def ensure_user_profile(
     finally:
         session.close()
 
-# -------------------------
-# 日次体組成 UPSERT
-# -------------------------
-def upsert_metrics_daily(user_id: str, d: date, weight_kg: Optional[float], body_fat_pc: Optional[float]) -> None:
-    session = SessionLocal()
-    try:
-        now = datetime.now(timezone.utc)
-        stmt = pg_insert(UserMetricsDaily).values(
-            user_id=user_id, date=d,
-            weight_kg=weight_kg, body_fat_pc=body_fat_pc,
-            created_at=now, updated_at=now
-        ).on_conflict_do_update(
-            index_elements=[UserMetricsDaily.user_id, UserMetricsDaily.date],
-            set_={"weight_kg": weight_kg, "body_fat_pc": body_fat_pc, "updated_at": now}
-        )
-        session.execute(stmt)
-        session.commit()
-    finally:
-        session.close()
+# =========================
+# 内部：UPSERTステートメント実行ヘルパ
+# =========================
+def _exec_upsert_metrics_daily(session, user_id: str, d: date, weight_kg: Optional[float], body_fat_pc: Optional[float]):
+    now = datetime.now(timezone.utc)
+    stmt = pg_insert(UserMetricsDaily).values(
+        user_id=user_id, date=d,
+        weight_kg=weight_kg, body_fat_pc=body_fat_pc,
+        created_at=now, updated_at=now
+    ).on_conflict_do_update(
+        index_elements=[UserMetricsDaily.user_id, UserMetricsDaily.date],
+        set_={"weight_kg": weight_kg, "body_fat_pc": body_fat_pc, "updated_at": now}
+    )
+    session.execute(stmt)
+
+def _exec_upsert_nutrition_daily(
+    session, user_id: str, d: date,
+    calorie_kcal: Optional[float], protein_g: Optional[float],
+    fat_g: Optional[float], carb_g: Optional[float]
+):
+    now = datetime.now(timezone.utc)
+    stmt = pg_insert(UserNutritionDaily).values(
+        user_id=user_id, date=d,
+        calorie_kcal=calorie_kcal, protein_g=protein_g, fat_g=fat_g, carb_g=carb_g,
+        created_at=now, updated_at=now
+    ).on_conflict_do_update(
+        index_elements=[UserNutritionDaily.user_id, UserNutritionDaily.date],
+        set_={
+            "calorie_kcal": calorie_kcal, "protein_g": protein_g,
+            "fat_g": fat_g, "carb_g": carb_g, "updated_at": now
+        }
+    )
+    session.execute(stmt)
 
 # -------------------------
-# 日次栄養 UPSERT
+# 日次体組成 UPSERT（互換＋高速化対応）
+# -------------------------
+def upsert_metrics_daily(
+    user_id: str, d: date,
+    weight_kg: Optional[float], body_fat_pc: Optional[float],
+    session=None
+) -> None:
+    """
+    - 既存互換: session を渡さない場合は内部でopen/commit。
+    - 高速化: session を外から渡すとバルク処理で一括commit可能。
+    """
+    if session is None:
+        s = SessionLocal()
+        try:
+            _exec_upsert_metrics_daily(s, user_id, d, weight_kg, body_fat_pc)
+            s.commit()
+        finally:
+            s.close()
+    else:
+        _exec_upsert_metrics_daily(session, user_id, d, weight_kg, body_fat_pc)
+
+# -------------------------
+# 日次栄養 UPSERT（互換＋高速化対応）
 # -------------------------
 def upsert_nutrition_daily(
     user_id: str, d: date,
-    calorie_kcal: Optional[float], protein_g: Optional[float], fat_g: Optional[float], carb_g: Optional[float]
+    calorie_kcal: Optional[float], protein_g: Optional[float],
+    fat_g: Optional[float], carb_g: Optional[float],
+    session=None
 ) -> None:
-    session = SessionLocal()
-    try:
-        now = datetime.now(timezone.utc)
-        stmt = pg_insert(UserNutritionDaily).values(
-            user_id=user_id, date=d,
-            calorie_kcal=calorie_kcal, protein_g=protein_g, fat_g=fat_g, carb_g=carb_g,
-            created_at=now, updated_at=now
-        ).on_conflict_do_update(
-            index_elements=[UserNutritionDaily.user_id, UserNutritionDaily.date],
-            set_={
-                "calorie_kcal": calorie_kcal, "protein_g": protein_g,
-                "fat_g": fat_g, "carb_g": carb_g, "updated_at": now
-            }
-        )
-        session.execute(stmt)
-        session.commit()
-    finally:
-        session.close()
+    if session is None:
+        s = SessionLocal()
+        try:
+            _exec_upsert_nutrition_daily(s, user_id, d, calorie_kcal, protein_g, fat_g, carb_g)
+            s.commit()
+        finally:
+            s.close()
+    else:
+        _exec_upsert_nutrition_daily(session, user_id, d, calorie_kcal, protein_g, fat_g, carb_g)
 
 # -------------------------
 # /users 用 検索（部分一致・小文字無視）

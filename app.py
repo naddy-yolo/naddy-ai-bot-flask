@@ -23,7 +23,7 @@ from utils.db import (
     get_user_profile_one,
     get_user_weights,
     get_user_intake,
-    # ★ 追加：日次UPSERT用
+    # ★ 追加：日次UPSERT用（session外出し対応版）
     upsert_metrics_daily,
     upsert_nutrition_daily,
 )
@@ -321,7 +321,7 @@ def receive_request():
         timestamp_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
         user_id = event.get("source", {}).get("userId")
 
-        # ✅ プロフィール同期（表示名・写真・last_contact を user_profile へUPSERT）
+        # ✅ プロフィール同期
         if user_id:
             display_name = ""
             photo_url = None
@@ -337,7 +337,7 @@ def receive_request():
             # last_contact はイベント時刻（UTC）
             last_contact_dt = datetime.fromtimestamp((event.get("timestamp") or 0) / 1000, tz=timezone.utc)
 
-            # マスターへUPSERT（名前が空なら既存を維持）
+            # マスターへUPSERT
             ensure_user_profile(
                 user_id=user_id,
                 name=display_name if display_name else None,
@@ -394,21 +394,31 @@ def receive_request():
                 w, bf = _extract_body_for_day(body_data, day)
                 kcal, p, f, c = _extract_nutrition_for_day(meal_data, day)
 
-                # DBへUPSERT（Noneはそのまま許容）
-                upsert_metrics_daily(
-                    user_id=user_id,
-                    d=datetime.fromisoformat(day).date(),
-                    weight_kg=w,
-                    body_fat_pc=bf
-                )
-                upsert_nutrition_daily(
-                    user_id=user_id,
-                    d=datetime.fromisoformat(day).date(),
-                    calorie_kcal=kcal,
-                    protein_g=p,
-                    fat_g=f,
-                    carb_g=c
-                )
+                # DBへUPSERT（1セッションでまとめてコミット）
+                s = SessionLocal()
+                try:
+                    upsert_metrics_daily(
+                        user_id=user_id,
+                        d=datetime.fromisoformat(day).date(),
+                        weight_kg=w,
+                        body_fat_pc=bf,
+                        session=s
+                    )
+                    upsert_nutrition_daily(
+                        user_id=user_id,
+                        d=datetime.fromisoformat(day).date(),
+                        calorie_kcal=kcal,
+                        protein_g=p,
+                        fat_g=f,
+                        carb_g=c,
+                        session=s
+                    )
+                    s.commit()
+                except Exception:
+                    s.rollback()
+                    raise
+                finally:
+                    s.close()
             except Exception as e:
                 app.logger.warning(f"[daily-upsert] {user_id} {day}: {e}")
         # ---- ここまで：UPSERT ----
@@ -762,20 +772,41 @@ def backfill_daily():
         body = get_anthropometric_data(uid, start_date=start, end_date=end)
         meal = get_meal_with_basis(uid, start, end)
 
-        d = s
-        saved = 0
-        while d <= e:
-            day = d.isoformat()
-            w, bf = _extract_body_for_day(body, day)
-            kcal, p, f, c = _extract_nutrition_for_day(meal, day)
+        rows_written = 0
+        empty_days = 0
 
-            upsert_metrics_daily(uid, d, w, bf)
-            upsert_nutrition_daily(uid, d, kcal, p, f, c)
+        dbs = SessionLocal()
+        try:
+            d = s
+            while d <= e:
+                day = d.isoformat()
+                w, bf = _extract_body_for_day(body, day)
+                kcal, p, f, c = _extract_nutrition_for_day(meal, day)
 
-            saved += 1
-            d += timedelta(days=1)
+                if (w is None and bf is None) and (kcal is None and p is None and f is None and c is None):
+                    empty_days += 1
+                else:
+                    upsert_metrics_daily(uid, d, w, bf, session=dbs)
+                    upsert_nutrition_daily(uid, d, kcal, p, f, c, session=dbs)
+                    rows_written += 1
 
-        return jsonify({"status": "ok", "saved_days": saved})
+                d += timedelta(days=1)
+
+            dbs.commit()
+        except Exception:
+            dbs.rollback()
+            raise
+        finally:
+            dbs.close()
+
+        return jsonify({
+            "status": "ok",
+            "user_id": uid,
+            "start_date": s.isoformat(),
+            "end_date": e.isoformat(),
+            "rows_written": rows_written,
+            "empty_days": empty_days
+        })
     except Exception as e:
         app.logger.exception(e)
         return jsonify({"error": "internal_error", "detail": str(e)}), 500

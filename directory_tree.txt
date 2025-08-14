@@ -1,0 +1,26 @@
+.
+├── .env
+├── .gitignore
+├── app.py
+├── directory_tree.txt
+├── generate_advice.py
+├── readme.txt
+├── requirements.txt
+├── runtime.txt
+├── scripts
+│   ├── authorize_token.py
+│   ├── generate_url_simple.py
+│   └── init_postgres.py
+├── services
+│   └── __init__.py
+├── test_webhook.json
+└── utils
+    ├── __init__.py
+    ├── caromil.py
+    ├── db.py
+    ├── env_utils.py
+    ├── formatting.py
+    ├── gpt_utils.py
+    └── line.py
+
+4 directories, 20 files
