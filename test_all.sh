@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-ADMIN_TOKEN="dev-admin-token"   # .env に合わせる
+ADMIN_TOKEN="dev-admin-token"  
 USER_ID="U72a7f79cdca51f15e6536106d89c414f"
 DAY="2025-08-09"
 START="2025-08-01"
@@ -30,4 +30,12 @@ curl -s "$BASE/user/weights?user_id=$USER_ID&start=$START&end=$END" \
 
 echo "=== /user/intake ==="
 curl -s "$BASE/user/intake?user_id=$USER_ID&start=$START&end=$END" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" | jq .
+
+curl -s -X POST "$API_BASE/sync-goals-range" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -d '{"user_id":"U72a7f79cdca51f15e6536106d89c414f","start":"2025-08-01","end":"2025-08-15"}' | jq .
+
+curl -s "$API_BASE/user/goals-range?user_id=U72a7f79cdca51f15e6536106d89c414f&start=2025-08-01&end=2025-08-15" \
   -H "X-Admin-Token: $ADMIN_TOKEN" | jq .

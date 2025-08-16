@@ -2,13 +2,15 @@
 from flask import Flask, jsonify, request
 import requests
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import text  # JOIN付き生SQLやUPSERTで使用
 
 from utils.caromil import (
     get_anthropometric_data,
-    get_meal_with_basis
+    get_meal_with_basis,
+    # ★ 追加：現在目標テンプレ取得
+    get_user_info,
 )
 from utils.db import (
     # 既存
@@ -23,9 +25,14 @@ from utils.db import (
     get_user_profile_one,
     get_user_weights,
     get_user_intake,
-    # ★ 追加：日次UPSERT用（session外出し対応版）
+    # ★ 既存：日次UPSERT
     upsert_metrics_daily,
     upsert_nutrition_daily,
+    # ★ 追加：目標スナップショット
+    upsert_goals_daily_bulk,
+    fetch_goals_range,
+    # ★ 追加：プロフィールに現在目標の控えを保存
+    set_user_goals_json,
 )
 from utils.gpt_utils import (
     classify_request_type,
@@ -88,7 +95,7 @@ def _extract_body_for_day(body_data, yyyy_mm_dd: str):
     対応フォーマット:
       1) {"data":[{"date":"2025-08-01","weight":65.2,"body_fat":18.4}, ...]}
       2) [{"date":"2025-08-01","weight_kg":65.2,"body_fat_pc":18.4}, ...]
-      3) {"result":[{"date":"2025/08/12","weight":64.7,"fat":15}, ...]}  ←今回の例
+      3) {"result":[{"date":"2025/08/12","weight":64.7,"fat":15}, ...]}
     """
     if not body_data:
         return None, None
@@ -123,14 +130,14 @@ def _extract_nutrition_for_day(meal_data, yyyy_mm_dd: str):
       B) {"days":[{"date":"2025-08-01","kcal":..., "p":..., "f":..., "c":...}, ...]}
       C) [{"date":"2025-08-01","calorie_kcal":..., "protein_g":..., "fat_g":..., "carb_g":...}]
       D) {"result":{"meal_with_basis":[{"date":"2025/08/12","meal_histories_summary":{"all":{...}}}]}}
-      E) {"meal_with_basis":[{"date":"2025/08/12","meal_histories_summary":{"all":{...}}}]} ←今回の可能性
+      E) {"meal_with_basis":[{"date":"2025/08/12","meal_histories_summary":{"all":{...}}}]}
     """
     if not meal_data:
         return None, None, None, None
 
     want = _norm_date(yyyy_mm_dd)
 
-    # 直下に meal_with_basis があるパターン（E）
+    # E: 直下に meal_with_basis
     if isinstance(meal_data, dict) and isinstance(meal_data.get("meal_with_basis"), list):
         for item in meal_data["meal_with_basis"]:
             if not isinstance(item, dict):
@@ -143,7 +150,7 @@ def _extract_nutrition_for_day(meal_data, yyyy_mm_dd: str):
                 c = _to_float(sums.get("carbohydrate") or sums.get("carb") or sums.get("c") or sums.get("carb_g"))
                 return kcal, p, f, c
 
-    # {"result":{"meal_with_basis":[...]}} のパターン（D）
+    # D: {"result":{"meal_with_basis":[...]}}
     if isinstance(meal_data, dict):
         result = meal_data.get("result")
         if isinstance(result, dict):
@@ -240,7 +247,7 @@ def test_userinfo():
             "Content-Type": "application/json"
         }
 
-        response = requests.post(url, headers=headers)
+        response = requests.post(url, headers=headers, timeout=30)
 
         if response.status_code == 200:
             return jsonify({"status": "ok", "result": response.json()})
@@ -316,9 +323,9 @@ def receive_request():
                 "message": "メッセージテキストが取得できませんでした"
             }), 200
 
-        # イベントのタイムスタンプ（ミリ秒）→ ISO 文字列
-        timestamp = event.get("timestamp") or datetime.now().timestamp()
-        timestamp_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
+        # イベントのタイムスタンプ（ms）。未提供なら現在時刻をmsで作る（÷1000バグ回避）
+        ts_ms = event.get("timestamp") or int(datetime.now().timestamp() * 1000)
+        timestamp_str = datetime.fromtimestamp(ts_ms / 1000).isoformat()
         user_id = event.get("source", {}).get("userId")
 
         # ✅ プロフィール同期
@@ -335,7 +342,7 @@ def receive_request():
                 app.logger.exception(f"[profile-sync] unexpected error: {e}")
 
             # last_contact はイベント時刻（UTC）
-            last_contact_dt = datetime.fromtimestamp((event.get("timestamp") or 0) / 1000, tz=timezone.utc)
+            last_contact_dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
 
             # マスターへUPSERT
             ensure_user_profile(
@@ -348,12 +355,13 @@ def receive_request():
         # メッセージ分類
         request_type = classify_request_type(message_text)
 
-        # リクエスト保存
+        # リクエスト保存（ステータスは 'pending' として保存）
         request_id = save_request({
             "message": message_text,
             "timestamp": timestamp_str,
             "user_id": user_id,
-            "request_type": request_type
+            "request_type": request_type,
+            "status": "pending",
         })
 
         # タイプ別アドバイス生成
@@ -765,7 +773,6 @@ def backfill_daily():
         if not uid or not start or not end:
             return jsonify({"error": "bad_request"}), 400
 
-        from datetime import timedelta
         s = datetime.fromisoformat(start).date()
         e = datetime.fromisoformat(end).date()
         if e < s:
@@ -831,6 +838,109 @@ def backfill_daily():
     except Exception as e:
         app.logger.exception(e)
         return jsonify({"error": "internal_error", "detail": str(e)}), 500
+
+# ---------------------------
+# ★ 新規：期間目標バックフィル（スナップショット保存）
+# ---------------------------
+@app.post("/sync-goals-range")
+def sync_goals_range():
+    auth = _require_admin()
+    if auth:
+        return auth
+    try:
+        payload = request.get_json(force=True) or {}
+        uid = (payload.get("user_id") or "").strip()
+        start = (payload.get("start") or "").strip()
+        end = (payload.get("end") or "").strip()
+        if not uid or not start or not end:
+            return jsonify({"status": "error", "message": "user_id, start, end are required (YYYY-MM-DD)"}), 400
+
+        s = datetime.fromisoformat(start).date()
+        e = datetime.fromisoformat(end).date()
+        if e < s:
+            return jsonify({"status": "error", "message": "invalid date range"}), 400
+
+        # 1) 現在の目標テンプレを取得
+        ui = get_user_info(uid) or {}
+        print("🔍 DEBUG: raw user_info keys =", list((ui or {}).keys()))
+
+        # 2) goal をできるだけ頑丈に取り出す
+        raw_goal = (
+            (ui.get("result") or {}).get("goal")  # {"result":{"goal":{...}}}
+            or ui.get("goal")                     # {"goal":{...}}
+            or ui                                  # 最後の保険
+            or {}
+        )
+
+        # 3) キー名のゆらぎ吸収＋数値化
+        def _safe_num(v):
+            try:
+                return float(v)
+            except Exception:
+                return None
+
+        kcal = _safe_num(raw_goal.get("calorie") or raw_goal.get("kcal") or raw_goal.get("calories"))
+        p    = _safe_num(raw_goal.get("protein") or raw_goal.get("protein_g"))
+        f    = _safe_num(raw_goal.get("lipid")   or raw_goal.get("fat") or raw_goal.get("fat_g"))
+        c    = _safe_num(raw_goal.get("carbohydrate") or raw_goal.get("carb") or raw_goal.get("carb_g"))
+
+        # 🔍 DEBUGログ
+        print("🔍 DEBUG: parsed goal =", raw_goal)
+        print("🔍 DEBUG: extracted kcal,p,f,c =", kcal, p, f, c)
+
+        # 2) 期間の各日に同じ目標を日別スナップショットとして保存
+        rows = []
+        cur = s
+        while cur <= e:
+            rows.append({"date": cur, "kcal": kcal, "p": p, "f": f, "c": c})
+            cur += timedelta(days=1)
+
+        stat = upsert_goals_daily_bulk(uid, rows)
+
+        # 3) user_profile.goals_json にも現在の目標テンプレを保存（控え）
+        set_user_goals_json(uid, {
+            "calorie": kcal,
+            "protein": p,
+            "lipid": f,
+            "carbohydrate": c,
+            "source": "calomeal_user_info",
+            "synced_at": datetime.now(timezone.utc).isoformat()
+        })
+
+        return jsonify({
+            "status": "ok",
+            "user_id": uid,
+            "start_date": s.isoformat(),
+            "end_date": e.isoformat(),
+            "rows_written": stat["written"],
+            "empty_days": stat["empty"],
+        })
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ---------------------------
+# ★ 新規：期間目標取得
+# ---------------------------
+@app.get("/user/goals-range")
+def user_goals_range():
+    auth = _require_admin()
+    if auth:
+        return auth
+    try:
+        uid = (request.args.get("user_id") or "").strip()
+        start = (request.args.get("start") or "").strip()
+        end = (request.args.get("end") or "").strip()
+        if not uid or not start or not end:
+            return jsonify({"status": "error", "message": "user_id, start, end are required (YYYY-MM-DD)"}), 400
+
+        s = datetime.fromisoformat(start).date()
+        e = datetime.fromisoformat(end).date()
+        rows = fetch_goals_range(uid, s, e)
+        return jsonify({"status": "ok", "data": rows})
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)

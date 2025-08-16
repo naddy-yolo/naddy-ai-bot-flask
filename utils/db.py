@@ -2,11 +2,9 @@
 from datetime import datetime, timezone, date
 from typing import List, Dict, Optional
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP
-from sqlalchemy import Date, Numeric
-from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
+from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, Date, Numeric, func, or_
+from sqlalchemy.dialects.postgresql import JSONB, ARRAY, insert as pg_insert
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import func, or_, ARRAY
 
 # ✅ POSTGRES_URL に統一して読み込む
 from utils.env_utils import POSTGRES_URL
@@ -29,9 +27,9 @@ class Request(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String)
     message = Column(Text)
-    timestamp = Column(String)
+    timestamp = Column(String)  # 既存互換：ISO文字列
     request_type = Column(String)
-    status = Column(String, default="未返信")
+    status = Column(String, default="pending")  # ★運用を 'pending' に統一
     advice_text = Column(Text)
 
 # =========================
@@ -58,7 +56,7 @@ class UserProfile(Base):
     created_at   = Column(TIMESTAMP(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at   = Column(TIMESTAMP(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     goals_json   = Column(JSONB, nullable=True)
-    tags         = Column(ARRAY(Text), nullable=True)  # ← DBの text[] に合わせる
+    tags         = Column(ARRAY(Text), nullable=True)  # PostgreSQLの text[] を使用
 
 # =========================
 # 日次体組成
@@ -89,6 +87,21 @@ class UserNutritionDaily(Base):
     updated_at    = Column(TIMESTAMP(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 # =========================
+# 日次目標（スナップショット）
+# =========================
+class UserGoalsDaily(Base):
+    __tablename__ = "user_goals_daily"
+
+    user_id = Column(String(64), primary_key=True)
+    date    = Column(Date, primary_key=True)
+    kcal    = Column(Numeric(7, 1), nullable=True)
+    p       = Column(Numeric(6, 1), nullable=True)
+    f       = Column(Numeric(6, 1), nullable=True)
+    c       = Column(Numeric(6, 1), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+# =========================
 # 初期化関数
 # =========================
 def init_db():
@@ -105,7 +118,7 @@ def save_request(data: dict) -> int:
             message=data.get("message"),
             timestamp=data.get("timestamp"),
             request_type=data.get("request_type"),
-            status=data.get("status", "未返信")
+            status=data.get("status", "pending"),
         )
         session.add(request)
         session.commit()
@@ -119,7 +132,7 @@ def get_unreplied_requests():
     try:
         return (
             session.query(Request)
-            .filter(Request.status == "未返信")
+            .filter(Request.status == "pending")
             .filter(Request.advice_text == None)
             .all()
         )
@@ -144,7 +157,7 @@ def update_advice_text(user_id: str, timestamp: str, advice_text: str):
     finally:
         session.close()
 
-def update_request_with_advice(request_id: int, advice_text: str, status: str = "未返信"):
+def update_request_with_advice(request_id: int, advice_text: str, status: str = "pending"):
     session = SessionLocal()
     try:
         request = session.query(Request).filter(Request.id == request_id).first()
@@ -232,6 +245,34 @@ def ensure_user_profile(
         session.commit()
     finally:
         session.close()
+
+# -------------------------
+# user_profile.goals_json 更新ヘルパ
+# -------------------------
+def set_user_goals_json(user_id: str, goals: dict) -> None:
+    """最新の目標テンプレートを user_profile.goals_json に保存"""
+    if not user_id:
+        return
+    ses = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        stmt = pg_insert(UserProfile).values(
+            user_id=user_id,
+            name=user_id,   # 既存があればON CONFLICT側で保持
+            goals_json=goals,
+            created_at=now,
+            updated_at=now,
+        ).on_conflict_do_update(
+            index_elements=[UserProfile.user_id],
+            set_={
+                "goals_json": goals,
+                "updated_at": now,
+            }
+        )
+        ses.execute(stmt)
+        ses.commit()
+    finally:
+        ses.close()
 
 # =========================
 # 内部：UPSERTステートメント実行ヘルパ
@@ -403,6 +444,83 @@ def get_user_intake(user_id: str, start: date, end: date) -> List[Dict]:
                 "protein_g": to_float(r.protein_g),
                 "fat_g": to_float(r.fat_g),
                 "carb_g": to_float(r.carb_g),
+            }
+            for r in rows
+        ]
+    finally:
+        session.close()
+
+# -------------------------
+# 目標スナップショット：UPSERT（バルク）
+# -------------------------
+def upsert_goals_daily_bulk(user_id: str, rows: List[Dict]) -> Dict[str, int]:
+    """
+    rows: [{"date": date, "kcal": float|None, "p": float|None, "f": float|None, "c": float|None}, ...]
+    """
+    if not rows:
+        return {"written": 0, "empty": 0}
+
+    now = datetime.now(timezone.utc)
+
+    # insert句を変数に保持して excluded を安全に参照
+    ins = pg_insert(UserGoalsDaily)
+    values = [
+        {
+            "user_id": user_id,
+            "date": r["date"],
+            "kcal": r.get("kcal"),
+            "p": r.get("p"),
+            "f": r.get("f"),
+            "c": r.get("c"),
+            "created_at": now,
+            "updated_at": now,
+        } for r in rows if r.get("date") is not None
+    ]
+    stmt = ins.values(values).on_conflict_do_update(
+        index_elements=[UserGoalsDaily.user_id, UserGoalsDaily.date],
+        set_={
+            "kcal": ins.excluded.kcal,
+            "p": ins.excluded.p,
+            "f": ins.excluded.f,
+            "c": ins.excluded.c,
+            "updated_at": now,
+        }
+    )
+
+    empty = sum(1 for r in rows if all(r.get(k) is None for k in ("kcal", "p", "f", "c")))
+
+    session = SessionLocal()
+    try:
+        session.execute(stmt)
+        session.commit()
+    finally:
+        session.close()
+
+    written = len([r for r in rows if r.get("date") is not None])
+    return {"written": written, "empty": empty}
+
+# -------------------------
+# 目標スナップショット：取得
+# -------------------------
+def fetch_goals_range(user_id: str, start_d: date, end_d: date) -> List[Dict]:
+    session = SessionLocal()
+    try:
+        rows = (
+            session.query(UserGoalsDaily)
+            .filter(UserGoalsDaily.user_id == user_id)
+            .filter(UserGoalsDaily.date >= start_d)
+            .filter(UserGoalsDaily.date <= end_d)
+            .order_by(UserGoalsDaily.date.asc())
+            .all()
+        )
+        to_float = lambda x: float(x) if x is not None else None
+        return [
+            {
+                "date": r.date.isoformat(),
+                "kcal": to_float(r.kcal),
+                "p": to_float(r.p),
+                "f": to_float(r.f),
+                "c": to_float(r.c),
             }
             for r in rows
         ]
