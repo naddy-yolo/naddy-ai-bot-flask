@@ -1,6 +1,7 @@
 # utils/caromil.py
 
 import json
+import re
 import requests
 from datetime import datetime, timedelta, date as date_cls
 from dateutil import parser  # pip install python-dateutil
@@ -148,12 +149,25 @@ def get_user_info(user_id: str) -> dict:
 # ============================================================
 
 def _to_float(x):
-    try:
-        if x in (None, "", "-"):
-            return None
+    """数値/文字列/単位付き文字列/カンマ入りに対応して float を返す"""
+    # そのまま数値なら
+    if isinstance(x, (int, float)):
         return float(x)
-    except Exception:
+    # 空値
+    if x in (None, "", "-"):
         return None
+    # 文字列なら「最初の数値」を抽出（例: '2.1 g', '1,234.5kcal'）
+    if isinstance(x, str):
+        s = x.replace(",", "")
+        m = re.search(r"[-+]?\d*\.?\d+", s)
+        if m:
+            try:
+                return float(m.group(0))
+            except Exception:
+                return None
+        return None
+    return None
+
 
 def _pick(lst_json: dict) -> list:
     """Calomeal/テストエンドポイント双方の形式差を吸収して配列を取り出す"""
@@ -167,11 +181,12 @@ def _pick(lst_json: dict) -> list:
     # その他
     return []
 
+
 def _extract_breakdown(day_obj: dict) -> dict | None:
     """
     Calomealの1日分オブジェクトから「朝/昼/夜/間食」のカロリー・PFC内訳を抽出。
     優先: meal_histories_summary → 無ければ basis.meal_histories_summary
-    ※欠損は None
+    同義キー（kcal/p/f/c、lipid、carbohydrate、*_g 等）や単位付き文字列も吸収。
     """
     src = day_obj.get("meal_histories_summary") \
           or (day_obj.get("basis", {}) or {}).get("meal_histories_summary")
@@ -179,13 +194,35 @@ def _extract_breakdown(day_obj: dict) -> dict | None:
     if not isinstance(src, dict):
         return None
 
+    # 別名候補リスト（出現順で優先）
+    alias = {
+        "calorie": ["calorie", "kcal", "calorie_kcal", "energy", "cal"],
+        "protein": ["protein", "p", "protein_g"],
+        "fat":     ["fat", "f", "lipid", "fat_g"],
+        "carb":    ["carb", "c", "carbohydrate", "carbohydrates", "carb_g", "cho"],
+    }
+
+    def pick_value(d: dict, names: list[str]):
+        for k in names:
+            if k in d and d.get(k) not in (None, "", "-"):
+                v = _to_float(d.get(k))
+                if v is not None:
+                    return v
+        return None
+
     slots = ["morning", "noon", "snack", "night"]
-    keys  = ["calorie", "protein", "fat", "carb"]
     out = {}
     for s in slots:
         if s in src and isinstance(src[s], dict):
-            out[s] = {k: _to_float(src[s].get(k)) for k in keys}
+            one = src[s]
+            out[s] = {
+                "calorie": pick_value(one, alias["calorie"]),
+                "protein": pick_value(one, alias["protein"]),
+                "fat":     pick_value(one, alias["fat"]),
+                "carb":    pick_value(one, alias["carb"]),
+            }
     return out or None
+
 
 def _extract_totals(day_obj: dict, breakdown: dict | None) -> dict:
     """
@@ -229,7 +266,6 @@ def _extract_totals(day_obj: dict, breakdown: dict | None) -> dict:
                 total["carb_g"]      += float(v["carb"])
 
         if any_val:
-            # 1桁小数で丸め（DB型に合わせて見栄え）
             for k in total:
                 total[k] = round(total[k], 1)
             return total
@@ -242,6 +278,7 @@ def _extract_totals(day_obj: dict, breakdown: dict | None) -> dict:
         "carb_g": None,
     }
 
+
 def _parse_date(dstr: str) -> date_cls | None:
     """Calomealは 'YYYY/MM/DD' 想定。安全に date へ"""
     if not dstr:
@@ -252,6 +289,7 @@ def _parse_date(dstr: str) -> date_cls | None:
         return parser.parse(dstr).date()
     except Exception:
         return None
+
 
 def save_intake_breakdown(user_id: str, start_date: str, end_date: str) -> dict:
     """
