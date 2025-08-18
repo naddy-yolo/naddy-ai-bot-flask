@@ -23,19 +23,21 @@ def to_slash_date(date_str: str) -> str:
     return date_str.replace("-", "/") if date_str and "-" in date_str else date_str
 
 
-def get_access_token(user_id: str) -> str:
-    """DBから有効なアクセストークンを取得（期限切れならrefresh_tokenで更新）"""
+# ★ 変更点: force_refresh 追加（401 の確実な再発行に使用）
+def get_access_token(user_id: str, *, force_refresh: bool = False) -> str:
+    """DBから有効なアクセストークンを取得（必要ならrefresh_tokenで更新）"""
     token_data = get_tokens(user_id)
     if not token_data:
         raise RuntimeError(f"ユーザー {user_id} のトークンがDBに存在しません")
 
-    expires_at = token_data.expires_at
-    if isinstance(expires_at, str):
-        expires_at = parser.parse(expires_at)
+    if not force_refresh:
+        expires_at = token_data.expires_at
+        if isinstance(expires_at, str):
+            expires_at = parser.parse(expires_at)
 
-    # 期限-1分を切っていたら更新
-    if datetime.utcnow() < (expires_at - timedelta(minutes=1)):
-        return token_data.access_token
+        # 期限-1分を切っていたら更新（force=false の通常判定）
+        if datetime.utcnow() < (expires_at - timedelta(minutes=1)):
+            return token_data.access_token
 
     # refresh_tokenで更新
     data = {
@@ -81,8 +83,9 @@ def get_anthropometric_data(user_id: str, start_date: str, end_date: str, unit: 
         print("✅ anthropometric 取得成功")
         return resp.json()
     if resp.status_code == 401:
-        print("⚠️ トークン期限切れ。再取得して再試行")
-        access_token = get_access_token(user_id)
+        print("⚠️ トークン期限/権限問題。強制リフレッシュして再試行")
+        # ★ 変更点: 強制リフレッシュ
+        access_token = get_access_token(user_id, force_refresh=True)
         headers["Authorization"] = f"Bearer {access_token}"
         retry = requests.post(ANTHRO_URL, headers=headers, data=data, timeout=30)
         if retry.status_code == 200:
@@ -111,8 +114,9 @@ def get_meal_with_basis(user_id: str, start_date: str, end_date: str):
         print("✅ meal_with_basis 取得成功")
         return resp.json()
     if resp.status_code == 401:
-        print("⚠️ トークン期限切れ。再取得して再試行")
-        access_token = get_access_token(user_id)
+        print("⚠️ トークン期限/権限問題。強制リフレッシュして再試行")
+        # ★ 変更点: 強制リフレッシュ
+        access_token = get_access_token(user_id, force_refresh=True)
         headers["Authorization"] = f"Bearer {access_token}"
         retry = requests.post(MEAL_BASIS_URL, headers=headers, data=data, timeout=30)
         if retry.status_code == 200:
@@ -133,8 +137,8 @@ def get_user_info(user_id: str) -> dict:
     if resp.status_code == 200:
         return resp.json()
     if resp.status_code == 401:
-        # リフレッシュして1回だけ再試行
-        access_token = get_access_token(user_id)
+        # ★ 変更点: 強制リフレッシュで再試行
+        access_token = get_access_token(user_id, force_refresh=True)
         headers["Authorization"] = f"Bearer {access_token}"
         retry = requests.post(USER_INFO_URL, headers=headers, timeout=30)
         if retry.status_code == 200:
@@ -219,11 +223,24 @@ def _extract_breakdown(day_obj: dict) -> dict | None:
 def _extract_totals(day_obj: dict, breakdown: dict | None) -> dict:
     """
     1日分の合計（kcal/P/F/C）を返す。
-    1) day_obj に total系があればそれを採用
-    2) なければ breakdown の合計で算出
-    3) どちらも無ければ None
+    1) meal_histories_summary['all'] に合計があれば最優先（★ 追加）
+    2) day_obj に total系があればそれを採用
+    3) なければ breakdown の合計で算出
+    4) どちらも無ければ None
     """
-    # パターンA: day_obj 内に "total" 風がある場合（保険）
+    # ★ 追加: summary["all"] からの直接取得
+    mhs = day_obj.get("meal_histories_summary") \
+        or (day_obj.get("basis", {}) or {}).get("meal_histories_summary")
+    if isinstance(mhs, dict) and isinstance(mhs.get("all"), dict):
+        allv = mhs["all"]
+        return {
+            "calorie_kcal": _to_float(allv.get("calorie") or allv.get("kcal") or allv.get("calories")),
+            "protein_g":    _to_float(allv.get("protein") or allv.get("p") or allv.get("protein_g")),
+            "fat_g":        _to_float(allv.get("fat") or allv.get("lipid") or allv.get("f") or allv.get("fat_g")),
+            "carb_g":       _to_float(allv.get("carbohydrate") or allv.get("carb") or allv.get("c") or allv.get("carb_g")),
+        }
+
+    # パターンA: day_obj 内に "total" 風がある場合
     possible_total_keys = [
         ("calorie_kcal", "protein_g", "fat_g", "carb_g"),
         ("calorie", "protein", "fat", "carb"),
@@ -234,9 +251,9 @@ def _extract_totals(day_obj: dict, breakdown: dict | None) -> dict:
         if all(k in day_obj for k in tkeys):
             return {
                 "calorie_kcal": _to_float(day_obj.get(a)),
-                "protein_g": _to_float(day_obj.get(p)),
-                "fat_g": _to_float(day_obj.get(f)),
-                "carb_g": _to_float(day_obj.get(c)),
+                "protein_g":    _to_float(day_obj.get(p)),
+                "fat_g":        _to_float(day_obj.get(f)),
+                "carb_g":       _to_float(day_obj.get(c)),
             }
 
     # パターンB: breakdown 合計で算出
@@ -310,7 +327,7 @@ def save_intake_breakdown(user_id: str, start_date: str, end_date: str) -> dict:
             protein_g=totals.get("protein_g"),
             fat_g=totals.get("fat_g"),
             carb_g=totals.get("carb_g"),
-            meals_breakdown=breakdown  # ★ JSONB で保存
+            meals_breakdown=breakdown  # JSONB で保存
         )
         written += 1
 

@@ -10,7 +10,7 @@ from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis,
     get_user_info,              # 目標取得
-    save_intake_breakdown,      # ★ 追加：合計＋内訳の安全保存ユーティリティ
+    save_intake_breakdown,      # ★ 合計＋内訳を安全保存（期間一括対応）
 )
 from utils.db import (
     save_request,
@@ -23,8 +23,7 @@ from utils.db import (
     get_user_profile_one,
     get_user_weights,
     get_user_intake,
-    upsert_metrics_daily,
-    upsert_nutrition_daily,     # meals_breakdown 引数対応版
+    upsert_metrics_daily,       # 体重/体脂肪の日次UPSERT
     upsert_goals_daily_bulk,
     fetch_goals_range,
     set_user_goals_json,
@@ -106,6 +105,7 @@ def _extract_body_for_day(body_data, yyyy_mm_dd: str):
     return None, None
 
 def _extract_nutrition_for_day(meal_data, yyyy_mm_dd: str):
+    """（検証用）必要に応じて個別日抽出。通常の保存は save_intake_breakdown で行う。"""
     if not meal_data:
         return None, None, None, None
 
@@ -121,7 +121,7 @@ def _extract_nutrition_for_day(meal_data, yyyy_mm_dd: str):
                 kcal = _to_float(sums.get("calorie") or sums.get("kcal") or sums.get("calories"))
                 p = _to_float(sums.get("protein") or sums.get("p") or sums.get("protein_g"))
                 f = _to_float(sums.get("fat") or sums.get("lipid") or sums.get("f") or sums.get("fat_g"))
-                c = _to_float(sums.get("carbohydrate") or sums.get("carb") or sums.get("c") or sums.get("carb_g"))
+                c = _to_float(sums.get("carbohydrate") or sums.get("carb") or sums.get("c") or sums.get("carbohydrate_g"))
                 return kcal, p, f, c
 
     # D: {"result":{"meal_with_basis":[...]}}
@@ -138,7 +138,7 @@ def _extract_nutrition_for_day(meal_data, yyyy_mm_dd: str):
                         kcal = _to_float(sums.get("calorie") or sums.get("kcal") or sums.get("calories"))
                         p = _to_float(sums.get("protein") or sums.get("p") or sums.get("protein_g"))
                         f = _to_float(sums.get("fat") or sums.get("lipid") or sums.get("f") or sums.get("fat_g"))
-                        c = _to_float(sums.get("carbohydrate") or sums.get("carb") or sums.get("c") or sums.get("carb_g"))
+                        c = _to_float(sums.get("carbohydrate") or sums.get("carb") or sums.get("c") or sums.get("carbohydrate_g"))
                         return kcal, p, f, c
 
     # 既存の A/B/C
@@ -356,15 +356,12 @@ def receive_request():
             print("🔍 生成されたアドバイス内容:", advice_text)
             update_request_with_advice(request_id, advice_text, status="pending")
 
-        # ---- 当日分のUPSERT（体重/合計）＋ breakdown 保存 ----
+        # ---- 当日分のUPSERT：体組成＋（合計＋内訳） ----
         if user_id:
             day = timestamp_str[:10]  # 'YYYY-MM-DD'
             try:
                 body_data = get_anthropometric_data(user_id, start_date=day, end_date=day)
-                meal_data = get_meal_with_basis(user_id, day, day)
-
                 w, bf = _extract_body_for_day(body_data, day)
-                kcal, p, f, c = _extract_nutrition_for_day(meal_data, day)
 
                 s = SessionLocal()
                 try:
@@ -375,15 +372,6 @@ def receive_request():
                         body_fat_pc=bf,
                         session=s
                     )
-                    upsert_nutrition_daily(
-                        user_id=user_id,
-                        d=datetime.fromisoformat(day).date(),
-                        calorie_kcal=kcal,
-                        protein_g=p,
-                        fat_g=f,
-                        carb_g=c,
-                        session=s
-                    )
                     s.commit()
                 except Exception:
                     s.rollback()
@@ -391,11 +379,9 @@ def receive_request():
                 finally:
                     s.close()
 
-                # ★ ここで breakdown も保存（合計が既にある場合も上書き安全）
-                try:
-                    save_intake_breakdown(user_id, day, day)
-                except Exception as be:
-                    app.logger.warning(f"[daily-breakdown] {user_id} {day}: {be}")
+                # ★ 栄養は save_intake_breakdown で当日分を一括保存（合計＋内訳）
+                stat = save_intake_breakdown(user_id, day, day)
+                app.logger.info(f"[receive-request] save_intake_breakdown({user_id}, {day}) -> {stat}")
 
             except Exception as e:
                 app.logger.warning(f"[daily-upsert] {user_id} {day}: {e}")
@@ -716,7 +702,7 @@ def api_user_intake():
     return jsonify({"data": rows}), 200
 
 # ---------------------------
-# ★ バックフィル（合計のみ：既存）
+# ★ バックフィル（合計＋内訳を期間一括保存）
 # ---------------------------
 @app.post("/backfill-daily")
 def backfill_daily():
@@ -737,8 +723,9 @@ def backfill_daily():
             return jsonify({"error": "invalid_date_range"}), 400
 
         CHUNK_DAYS = 7
-        rows_written = 0
-        empty_days = 0
+        rows_written = 0        # 体組成の保存行数
+        empty_days = 0          # 体組成が空だった日数
+        intake_written = 0      # 栄養（合計＋内訳）の書き込み件数
 
         dbs = SessionLocal()
         try:
@@ -747,33 +734,32 @@ def backfill_daily():
                 chunk_end = min(cur + timedelta(days=CHUNK_DAYS - 1), e)
                 sd, ed = cur.isoformat(), chunk_end.isoformat()
 
+                # 1) 体組成はチャンク取得 → 日別UPSERT
                 body = None
-                meal = None
                 try:
                     body = get_anthropometric_data(uid, start_date=sd, end_date=ed)
                 except Exception as be:
                     app.logger.warning(f"[backfill-daily] anthropometric chunk fail {uid} {sd}..{ed}: {be}")
-                try:
-                    meal = get_meal_with_basis(uid, sd, ed)
-                except Exception as me:
-                    app.logger.warning(f"[backfill-daily] meal_with_basis chunk fail {uid} {sd}..{ed}: {me}")
 
                 d = cur
                 while d <= chunk_end:
                     day = d.isoformat()
                     try:
                         w, bf = _extract_body_for_day(body, day) if body is not None else (None, None)
-                        kcal, p, f, c = _extract_nutrition_for_day(meal, day) if meal is not None else (None, None, None, None)
-
                         upsert_metrics_daily(uid, d, w, bf, session=dbs)
-                        upsert_nutrition_daily(uid, d, kcal, p, f, c, session=dbs)
-
                         rows_written += 1
-                        if w is None and kcal is None and p is None and f is None and c is None:
+                        if w is None:
                             empty_days += 1
                     except Exception as de:
-                        app.logger.warning(f"[backfill-daily] save fail {uid} {day}: {de}")
+                        app.logger.warning(f"[backfill-daily] save metrics fail {uid} {day}: {de}")
                     d += timedelta(days=1)
+
+                # 2) 栄養は save_intake_breakdown でチャンク一括保存（合計＋内訳）
+                try:
+                    stat = save_intake_breakdown(uid, sd, ed)
+                    intake_written += int(stat.get("written", 0))
+                except Exception as me:
+                    app.logger.warning(f"[backfill-daily] save_intake_breakdown fail {uid} {sd}..{ed}: {me}")
 
                 cur = chunk_end + timedelta(days=1)
 
@@ -789,15 +775,16 @@ def backfill_daily():
             "user_id": uid,
             "start_date": s.isoformat(),
             "end_date": e.isoformat(),
-            "rows_written": rows_written,
-            "empty_days": empty_days
+            "rows_written": rows_written,      # 体組成のUPSERT件数
+            "empty_days": empty_days,          # 体組成が空だった日
+            "intake_written": intake_written,  # 栄養（日数）書き込み件数（参考）
         })
     except Exception as e:
         app.logger.exception(e)
         return jsonify({"error": "internal_error", "detail": str(e)}), 500
 
 # ---------------------------
-# ★ 新規：不足分だけ同期（合計 or 内訳が欠けている日を埋める）
+# ★ 不足分だけ同期（合計 or 内訳が欠けている日を埋める）
 # ---------------------------
 @app.post("/backfill-intake-missing")
 def backfill_intake_missing():
