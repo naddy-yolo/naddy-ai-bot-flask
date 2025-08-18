@@ -1,5 +1,4 @@
 # utils/caromil.py
-
 import json
 import re
 import requests
@@ -148,8 +147,6 @@ def get_user_info(user_id: str) -> dict:
 # ここから：breakdown 抽出＆保存ユーティリティ
 # ============================================================
 
-import re
-
 def _to_float(x):
     """数値/文字列/単位付き文字列/カンマ入りに対応して float を返す"""
     if isinstance(x, (int, float)):
@@ -195,35 +192,6 @@ def _extract_breakdown(day_obj: dict) -> dict | None:
         "protein": ["protein", "p", "protein_g"],
         "fat":     ["fat", "f", "lipid", "fat_g", "lipid_g", "fat_total_g", "fat_weight"],
         "carb":    ["carb", "c", "carbohydrate", "carbohydrates", "carb_g", "cho", "carbohydrate_g", "available_carbohydrate"],
-    }
-
-    def pick_value(d: dict, names: list[str]):
-        for k in names:
-            if k in d and d.get(k) not in (None, "", "-"):
-                v = _to_float(d.get(k))
-                if v is not None:
-                    return v
-        return None
-
-    slots = ["morning", "noon", "snack", "night"]
-    out = {}
-    for s in slots:
-        if s in src and isinstance(src[s], dict):
-            one = src[s]
-            out[s] = {
-                "calorie": pick_value(one, alias["calorie"]),
-                "protein": pick_value(one, alias["protein"]),
-                "fat":     pick_value(one, alias["fat"]),
-                "carb":    pick_value(one, alias["carb"]),
-            }
-    return out or None
-
-    # 別名候補リスト（出現順で優先）
-    alias = {
-        "calorie": ["calorie", "kcal", "calorie_kcal", "energy", "cal"],
-        "protein": ["protein", "p", "protein_g"],
-        "fat":     ["fat", "f", "lipid", "fat_g"],
-        "carb":    ["carb", "c", "carbohydrate", "carbohydrates", "carb_g", "cho"],
     }
 
     def pick_value(d: dict, names: list[str]):

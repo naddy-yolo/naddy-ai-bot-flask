@@ -2,36 +2,31 @@
 from flask import Flask, jsonify, request
 import requests
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date as date_cls
 
 from sqlalchemy import text  # JOIN付き生SQLやUPSERTで使用
 
 from utils.caromil import (
     get_anthropometric_data,
     get_meal_with_basis,
-    # ★ 追加：現在目標テンプレ取得
-    get_user_info,
+    get_user_info,              # 目標取得
+    save_intake_breakdown,      # ★ 追加：合計＋内訳の安全保存ユーティリティ
 )
 from utils.db import (
-    # 既存
     save_request,
     update_request_with_advice,
     init_db,
     SessionLocal,
     Request,
-    # 追加（Step2Aで実装）
     ensure_user_profile,
     search_users,
     get_user_profile_one,
     get_user_weights,
     get_user_intake,
-    # ★ 既存：日次UPSERT
     upsert_metrics_daily,
-    upsert_nutrition_daily,
-    # ★ 追加：目標スナップショット
+    upsert_nutrition_daily,     # meals_breakdown 引数対応版
     upsert_goals_daily_bulk,
     fetch_goals_range,
-    # ★ 追加：プロフィールに現在目標の控えを保存
     set_user_goals_json,
 )
 from utils.gpt_utils import (
@@ -58,13 +53,9 @@ app = Flask(__name__)
 # 管理API 用の簡易認証
 # ---------------------------
 def _require_admin():
-    """
-    管理APIの簡易認証。環境変数 ADMIN_TOKEN が設定されている場合のみ有効。
-    未設定ならチェックをスキップ（開発用）。
-    """
     admin_token = os.getenv("ADMIN_TOKEN")
     if not admin_token:
-        return None  # 認証スキップ
+        return None  # 認証スキップ（開発用）
     if request.headers.get("X-Admin-Token") != admin_token:
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
     return None
@@ -83,20 +74,12 @@ def _to_float(v):
         return None
 
 def _norm_date(s: str) -> str:
-    """'2025/08/12' も '2025-08-12' に正規化して比較"""
     if not s:
         return ""
     s = s.strip().replace("/", "-")
     return s[:10]
 
 def _extract_body_for_day(body_data, yyyy_mm_dd: str):
-    """
-    get_anthropometric_data の返り値から、その日の weight, body_fat を抜き出す。
-    対応フォーマット:
-      1) {"data":[{"date":"2025-08-01","weight":65.2,"body_fat":18.4}, ...]}
-      2) [{"date":"2025-08-01","weight_kg":65.2,"body_fat_pc":18.4}, ...]
-      3) {"result":[{"date":"2025/08/12","weight":64.7,"fat":15}, ...]}
-    """
     if not body_data:
         return None, None
 
@@ -123,15 +106,6 @@ def _extract_body_for_day(body_data, yyyy_mm_dd: str):
     return None, None
 
 def _extract_nutrition_for_day(meal_data, yyyy_mm_dd: str):
-    """
-    get_meal_with_basis の返り値から、その日の kcal/P/F/C 合計を抜き出す。
-    対応フォーマット:
-      A) {"summary":{"date":"2025-08-01","calorie":..., "protein":..., "fat":..., "carb":...}}
-      B) {"days":[{"date":"2025-08-01","kcal":..., "p":..., "f":..., "c":...}, ...]}
-      C) [{"date":"2025-08-01","calorie_kcal":..., "protein_g":..., "fat_g":..., "carb_g":...}]
-      D) {"result":{"meal_with_basis":[{"date":"2025/08/12","meal_histories_summary":{"all":{...}}}]}}
-      E) {"meal_with_basis":[{"date":"2025/08/12","meal_histories_summary":{"all":{...}}}]}
-    """
     if not meal_data:
         return None, None, None, None
 
@@ -323,7 +297,6 @@ def receive_request():
                 "message": "メッセージテキストが取得できませんでした"
             }), 200
 
-        # イベントのタイムスタンプ（ms）。未提供なら現在時刻をmsで作る（÷1000バグ回避）
         ts_ms = event.get("timestamp") or int(datetime.now().timestamp() * 1000)
         timestamp_str = datetime.fromtimestamp(ts_ms / 1000).isoformat()
         user_id = event.get("source", {}).get("userId")
@@ -333,7 +306,7 @@ def receive_request():
             display_name = ""
             photo_url = None
             try:
-                prof = get_line_profile(user_id)  # LINE APIから取得
+                prof = get_line_profile(user_id)
                 display_name = prof.get("displayName") or ""
                 photo_url = prof.get("pictureUrl") or None
             except LineProfileError as e:
@@ -341,10 +314,7 @@ def receive_request():
             except Exception as e:
                 app.logger.exception(f"[profile-sync] unexpected error: {e}")
 
-            # last_contact はイベント時刻（UTC）
             last_contact_dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-
-            # マスターへUPSERT
             ensure_user_profile(
                 user_id=user_id,
                 name=display_name if display_name else None,
@@ -352,10 +322,8 @@ def receive_request():
                 last_contact=last_contact_dt
             )
 
-        # メッセージ分類
         request_type = classify_request_type(message_text)
 
-        # リクエスト保存（ステータスは 'pending' として保存）
         request_id = save_request({
             "message": message_text,
             "timestamp": timestamp_str,
@@ -364,7 +332,6 @@ def receive_request():
             "status": "pending",
         })
 
-        # タイプ別アドバイス生成
         advice_text = None
         if request_type == "meal_feedback":
             meal_data = get_meal_with_basis(user_id, timestamp_str[:10], timestamp_str[:10])
@@ -385,24 +352,20 @@ def receive_request():
         else:
             advice_text = generate_other_reply(message_text)
 
-        # アドバイスをDBに更新（★ status を 'pending' に統一）
         if advice_text:
             print("🔍 生成されたアドバイス内容:", advice_text)
             update_request_with_advice(request_id, advice_text, status="pending")
 
-        # ---- ここから：当日分の日次データを保存（UPSERT） ----
+        # ---- 当日分のUPSERT（体重/合計）＋ breakdown 保存 ----
         if user_id:
             day = timestamp_str[:10]  # 'YYYY-MM-DD'
             try:
-                # Calomeal から当日の体組成/食事合計を取得
                 body_data = get_anthropometric_data(user_id, start_date=day, end_date=day)
                 meal_data = get_meal_with_basis(user_id, day, day)
 
-                # 取り出し（★ 日付/キー揺れ対応済み）
                 w, bf = _extract_body_for_day(body_data, day)
                 kcal, p, f, c = _extract_nutrition_for_day(meal_data, day)
 
-                # DBへUPSERT（1セッションでまとめてコミット）
                 s = SessionLocal()
                 try:
                     upsert_metrics_daily(
@@ -427,9 +390,16 @@ def receive_request():
                     raise
                 finally:
                     s.close()
+
+                # ★ ここで breakdown も保存（合計が既にある場合も上書き安全）
+                try:
+                    save_intake_breakdown(user_id, day, day)
+                except Exception as be:
+                    app.logger.warning(f"[daily-breakdown] {user_id} {day}: {be}")
+
             except Exception as e:
                 app.logger.warning(f"[daily-upsert] {user_id} {day}: {e}")
-        # ---- ここまで：UPSERT ----
+        # ---- ここまで ----
 
         return jsonify({
             "status": "success",
@@ -451,7 +421,6 @@ def get_unreplied():
 
     session = SessionLocal()
     try:
-        # user_profile を LEFT JOIN して user_name を同梱
         sql = text("""
             SELECT
                 r.id,
@@ -472,7 +441,6 @@ def get_unreplied():
         data = []
         for row in rows:
             rid, user_id, user_name, message, req_type, ts, advice = row
-            # timestamp を ISO 文字列に統一（DBが文字列のためtry）
             try:
                 ts_val = ts.isoformat()
             except Exception:
@@ -544,7 +512,6 @@ def send_reply():
             print("❌ LINE送信エラー:", e)
             return jsonify({"status": "error", "message": f"LINE送信失敗: {e}"}), 502
 
-        # ★ 'replied' に統一
         r.status = "replied"
         r.advice_text = message_text
         session.commit()
@@ -597,9 +564,8 @@ def send_summary_and_advice():
             print("❌ LINE送信エラー:", e)
             return jsonify({"status": "error", "message": f"LINE送信失敗: {e}"}), 502
 
-        # ★ 'replied' に統一
         r.status = "replied"
-        r.advice_text = message_text  # 送信した最終本文で上書き
+        r.advice_text = message_text
         session.commit()
 
         return jsonify({"status": "ok"})
@@ -611,7 +577,7 @@ def send_summary_and_advice():
         session.close()
 
 # ---------------------------
-# ★ 新規：除外API（推奨：/update-status のラッパ）
+# ★ 新規：除外API
 # ---------------------------
 @app.route("/update-status", methods=["POST"])
 def update_status():
@@ -647,10 +613,6 @@ def update_status():
 
 @app.route("/discard-request", methods=["POST"])
 def discard_request():
-    """
-    互換エンドポイント。UIがまだ /discard-request を叩く場合のため。
-    内部的に 'ignored' へ更新する。
-    """
     auth = _require_admin()
     if auth:
         return auth
@@ -679,7 +641,7 @@ def discard_request():
         session.close()
 
 # ---------------------------
-# ★ 新規：/users（検索）
+# ★ /users
 # ---------------------------
 @app.route("/users", methods=["GET"])
 def api_users():
@@ -696,7 +658,7 @@ def api_users():
     return jsonify({"data": rows}), 200
 
 # ---------------------------
-# ★ 新規：/user/profile（1件取得）
+# ★ /user/profile
 # ---------------------------
 @app.route("/user/profile", methods=["GET"])
 def api_user_profile():
@@ -712,7 +674,7 @@ def api_user_profile():
     return jsonify({"data": row}), 200
 
 # ---------------------------
-# ★ 新規：/user/weights（体重の期間取得）
+# ★ /user/weights
 # ---------------------------
 @app.route("/user/weights", methods=["GET"])
 def api_user_weights():
@@ -733,7 +695,7 @@ def api_user_weights():
     return jsonify({"data": rows}), 200
 
 # ---------------------------
-# ★ 新規：/user/intake（栄養の期間取得）
+# ★ /user/intake
 # ---------------------------
 @app.route("/user/intake", methods=["GET"])
 def api_user_intake():
@@ -754,21 +716,17 @@ def api_user_intake():
     return jsonify({"data": rows}), 200
 
 # ---------------------------
-# ★ 新規：過去分バックフィル（管理用）
+# ★ バックフィル（合計のみ：既存）
 # ---------------------------
 @app.post("/backfill-daily")
 def backfill_daily():
-    """指定ユーザーの指定期間を Calomeal から取得し、日次テーブルへUPSERTする
-       - 7日チャンクでCalomealに問い合わせ（長期間の500回避）
-       - 片方のAPIが失敗しても保存処理は継続
-    """
     auth = _require_admin()
     if auth:
         return auth
     try:
         payload = request.get_json(force=True) or {}
         uid = (payload.get("user_id") or "").strip()
-        start = (payload.get("start") or "").strip()  # 'YYYY-MM-DD'
+        start = (payload.get("start") or "").strip()
         end = (payload.get("end") or "").strip()
         if not uid or not start or not end:
             return jsonify({"error": "bad_request"}), 400
@@ -807,7 +765,6 @@ def backfill_daily():
                         w, bf = _extract_body_for_day(body, day) if body is not None else (None, None)
                         kcal, p, f, c = _extract_nutrition_for_day(meal, day) if meal is not None else (None, None, None, None)
 
-                        # （空でも）両テーブルにUPSERTして updated_at を揃える
                         upsert_metrics_daily(uid, d, w, bf, session=dbs)
                         upsert_nutrition_daily(uid, d, kcal, p, f, c, session=dbs)
 
@@ -840,7 +797,101 @@ def backfill_daily():
         return jsonify({"error": "internal_error", "detail": str(e)}), 500
 
 # ---------------------------
-# ★ 新規：期間目標バックフィル（スナップショット保存）
+# ★ 新規：不足分だけ同期（合計 or 内訳が欠けている日を埋める）
+# ---------------------------
+@app.post("/backfill-intake-missing")
+def backfill_intake_missing():
+    """
+    表示期間のうち「行が無い / 合計のどれかがNULL / meals_breakdownがNULL/空」の日だけ
+    Calomealから取得して user_nutrition_daily を埋める。
+    save_intake_breakdown() を使うので合計＋内訳をまとめて保存。
+    """
+    auth = _require_admin()
+    if auth:
+        return auth
+    try:
+        payload = request.get_json(force=True) or {}
+        uid = (payload.get("user_id") or "").strip()
+        start = (payload.get("start") or "").strip()
+        end = (payload.get("end") or "").strip()
+        if not uid or not start or not end:
+            return jsonify({"status": "error", "message": "bad_request"}), 400
+
+        s = datetime.fromisoformat(start).date()
+        e = datetime.fromisoformat(end).date()
+        if e < s:
+            return jsonify({"status": "error", "message": "invalid date range"}), 400
+
+        # 1) 期間内の既存行を取得
+        ses = SessionLocal()
+        try:
+            sql = text("""
+                SELECT date, calorie_kcal, protein_g, fat_g, carb_g, meals_breakdown
+                FROM user_nutrition_daily
+                WHERE user_id = :uid AND date BETWEEN :s AND :e
+            """)
+            rows = ses.execute(sql, {"uid": uid, "s": s, "e": e}).fetchall()
+        finally:
+            ses.close()
+
+        # 2) 期間全日と突合
+        all_days = []
+        cur = s
+        while cur <= e:
+            all_days.append(cur)
+            cur += timedelta(days=1)
+
+        by_date = {r[0]: {"k": r[1], "p": r[2], "f": r[3], "c": r[4], "mb": r[5]} for r in rows}
+
+        need_dates = []
+        for d in all_days:
+            if d not in by_date:
+                need_dates.append(d); continue
+            rec = by_date[d]
+            # 合計のいずれかが None → 要取得（0 は有効値なのでOK）
+            if any(v is None for v in [rec["k"], rec["p"], rec["f"], rec["c"]]):
+                need_dates.append(d); continue
+            # 内訳が NULL/空 → 要取得
+            if rec["mb"] in (None, {}, ""):
+                need_dates.append(d); continue
+
+        # 3) 連続区間にまとめて API 呼び出し回数を減らす
+        def _group_ranges(dates: list[date_cls]) -> list[tuple[date_cls, date_cls]]:
+            if not dates:
+                return []
+            dates = sorted(dates)
+            groups = []
+            start_d = prev = dates[0]
+            for d in dates[1:]:
+                if (d - prev).days == 1:
+                    prev = d
+                else:
+                    groups.append((start_d, prev))
+                    start_d = prev = d
+            groups.append((start_d, prev))
+            return groups
+
+        ranges = _group_ranges(need_dates)
+        total_written = 0
+        for (d1, d2) in ranges:
+            stat = save_intake_breakdown(uid, d1.isoformat(), d2.isoformat())
+            total_written += int(stat.get("written", 0))
+
+        return jsonify({
+            "status": "ok",
+            "user_id": uid,
+            "start_date": s.isoformat(),
+            "end_date": e.isoformat(),
+            "need_days": len(need_dates),
+            "written": total_written,
+            "ranges": [{"start": a.isoformat(), "end": b.isoformat()} for (a, b) in ranges],
+        })
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ---------------------------
+# ★ 期間目標バックフィル
 # ---------------------------
 @app.post("/sync-goals-range")
 def sync_goals_range():
@@ -860,19 +911,14 @@ def sync_goals_range():
         if e < s:
             return jsonify({"status": "error", "message": "invalid date range"}), 400
 
-        # 1) 現在の目標テンプレを取得
         ui = get_user_info(uid) or {}
-        print("🔍 DEBUG: raw user_info keys =", list((ui or {}).keys()))
-
-        # 2) goal をできるだけ頑丈に取り出す
         raw_goal = (
-            (ui.get("result") or {}).get("goal")  # {"result":{"goal":{...}}}
-            or ui.get("goal")                     # {"goal":{...}}
-            or ui                                  # 最後の保険
+            (ui.get("result") or {}).get("goal")
+            or ui.get("goal")
+            or ui
             or {}
         )
 
-        # 3) キー名のゆらぎ吸収＋数値化
         def _safe_num(v):
             try:
                 return float(v)
@@ -884,11 +930,6 @@ def sync_goals_range():
         f    = _safe_num(raw_goal.get("lipid")   or raw_goal.get("fat") or raw_goal.get("fat_g"))
         c    = _safe_num(raw_goal.get("carbohydrate") or raw_goal.get("carb") or raw_goal.get("carb_g"))
 
-        # 🔍 DEBUGログ
-        print("🔍 DEBUG: parsed goal =", raw_goal)
-        print("🔍 DEBUG: extracted kcal,p,f,c =", kcal, p, f, c)
-
-        # 2) 期間の各日に同じ目標を日別スナップショットとして保存
         rows = []
         cur = s
         while cur <= e:
@@ -897,7 +938,6 @@ def sync_goals_range():
 
         stat = upsert_goals_daily_bulk(uid, rows)
 
-        # 3) user_profile.goals_json にも現在の目標テンプレを保存（控え）
         set_user_goals_json(uid, {
             "calorie": kcal,
             "protein": p,
@@ -920,7 +960,7 @@ def sync_goals_range():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # ---------------------------
-# ★ 新規：期間目標取得
+# ★ 期間目標取得
 # ---------------------------
 @app.get("/user/goals-range")
 def user_goals_range():
