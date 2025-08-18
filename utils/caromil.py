@@ -148,15 +148,14 @@ def get_user_info(user_id: str) -> dict:
 # ここから：breakdown 抽出＆保存ユーティリティ
 # ============================================================
 
+import re
+
 def _to_float(x):
     """数値/文字列/単位付き文字列/カンマ入りに対応して float を返す"""
-    # そのまま数値なら
     if isinstance(x, (int, float)):
         return float(x)
-    # 空値
     if x in (None, "", "-"):
         return None
-    # 文字列なら「最初の数値」を抽出（例: '2.1 g', '1,234.5kcal'）
     if isinstance(x, str):
         s = x.replace(",", "")
         m = re.search(r"[-+]?\d*\.?\d+", s)
@@ -171,14 +170,11 @@ def _to_float(x):
 
 def _pick(lst_json: dict) -> list:
     """Calomeal/テストエンドポイント双方の形式差を吸収して配列を取り出す"""
-    # 例1: {"meal_with_basis": [ {...}, ... ]}
     if isinstance(lst_json, dict) and "meal_with_basis" in lst_json:
         return lst_json.get("meal_with_basis") or []
-    # 例2: {"result": {"meal_with_basis": [ {...} ]}}
     if isinstance(lst_json, dict) and "result" in lst_json:
         res = lst_json.get("result") or {}
         return res.get("meal_with_basis") or []
-    # その他
     return []
 
 
@@ -193,6 +189,34 @@ def _extract_breakdown(day_obj: dict) -> dict | None:
 
     if not isinstance(src, dict):
         return None
+
+    alias = {
+        "calorie": ["calorie", "kcal", "calorie_kcal", "energy", "cal"],
+        "protein": ["protein", "p", "protein_g"],
+        "fat":     ["fat", "f", "lipid", "fat_g", "lipid_g", "fat_total_g", "fat_weight"],
+        "carb":    ["carb", "c", "carbohydrate", "carbohydrates", "carb_g", "cho", "carbohydrate_g", "available_carbohydrate"],
+    }
+
+    def pick_value(d: dict, names: list[str]):
+        for k in names:
+            if k in d and d.get(k) not in (None, "", "-"):
+                v = _to_float(d.get(k))
+                if v is not None:
+                    return v
+        return None
+
+    slots = ["morning", "noon", "snack", "night"]
+    out = {}
+    for s in slots:
+        if s in src and isinstance(src[s], dict):
+            one = src[s]
+            out[s] = {
+                "calorie": pick_value(one, alias["calorie"]),
+                "protein": pick_value(one, alias["protein"]),
+                "fat":     pick_value(one, alias["fat"]),
+                "carb":    pick_value(one, alias["carb"]),
+            }
+    return out or None
 
     # 別名候補リスト（出現順で優先）
     alias = {
