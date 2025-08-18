@@ -83,6 +83,7 @@ class UserNutritionDaily(Base):
     protein_g     = Column(Numeric(6, 1))
     fat_g         = Column(Numeric(6, 1))
     carb_g        = Column(Numeric(6, 1))
+    meals_breakdown = Column(JSONB, nullable=True)   # ★ 追加
     created_at    = Column(TIMESTAMP(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at    = Column(TIMESTAMP(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
@@ -292,19 +293,39 @@ def _exec_upsert_metrics_daily(session, user_id: str, d: date, weight_kg: Option
 def _exec_upsert_nutrition_daily(
     session, user_id: str, d: date,
     calorie_kcal: Optional[float], protein_g: Optional[float],
-    fat_g: Optional[float], carb_g: Optional[float]
+    fat_g: Optional[float], carb_g: Optional[float],
+    meals_breakdown: Optional[dict] = None
 ):
     now = datetime.now(timezone.utc)
-    stmt = pg_insert(UserNutritionDaily).values(
-        user_id=user_id, date=d,
-        calorie_kcal=calorie_kcal, protein_g=protein_g, fat_g=fat_g, carb_g=carb_g,
-        created_at=now, updated_at=now
-    ).on_conflict_do_update(
+
+    values = {
+        "user_id": user_id,
+        "date": d,
+        "calorie_kcal": calorie_kcal,
+        "protein_g": protein_g,
+        "fat_g": fat_g,
+        "carb_g": carb_g,
+        "created_at": now,
+        "updated_at": now,
+    }
+    if meals_breakdown is not None:
+        values["meals_breakdown"] = meals_breakdown
+
+    ins = pg_insert(UserNutritionDaily).values(values)
+
+    update_set = {
+        "calorie_kcal": ins.excluded.calorie_kcal,
+        "protein_g": ins.excluded.protein_g,
+        "fat_g": ins.excluded.fat_g,
+        "carb_g": ins.excluded.carb_g,
+        "updated_at": now,
+    }
+    if "meals_breakdown" in values:
+        update_set["meals_breakdown"] = ins.excluded.meals_breakdown
+
+    stmt = ins.on_conflict_do_update(
         index_elements=[UserNutritionDaily.user_id, UserNutritionDaily.date],
-        set_={
-            "calorie_kcal": calorie_kcal, "protein_g": protein_g,
-            "fat_g": fat_g, "carb_g": carb_g, "updated_at": now
-        }
+        set_=update_set
     )
     session.execute(stmt)
 
@@ -337,17 +358,24 @@ def upsert_nutrition_daily(
     user_id: str, d: date,
     calorie_kcal: Optional[float], protein_g: Optional[float],
     fat_g: Optional[float], carb_g: Optional[float],
+    meals_breakdown: Optional[dict] = None,
     session=None
 ) -> None:
     if session is None:
         s = SessionLocal()
         try:
-            _exec_upsert_nutrition_daily(s, user_id, d, calorie_kcal, protein_g, fat_g, carb_g)
+            _exec_upsert_nutrition_daily(
+                s, user_id, d, calorie_kcal, protein_g, fat_g, carb_g,
+                meals_breakdown=meals_breakdown
+            )
             s.commit()
         finally:
             s.close()
     else:
-        _exec_upsert_nutrition_daily(session, user_id, d, calorie_kcal, protein_g, fat_g, carb_g)
+        _exec_upsert_nutrition_daily(
+            session, user_id, d, calorie_kcal, protein_g, fat_g, carb_g,
+            meals_breakdown=meals_breakdown
+        )
 
 # -------------------------
 # /users 用 検索（部分一致・小文字無視）
@@ -444,6 +472,7 @@ def get_user_intake(user_id: str, start: date, end: date) -> List[Dict]:
                 "protein_g": to_float(r.protein_g),
                 "fat_g": to_float(r.fat_g),
                 "carb_g": to_float(r.carb_g),
+                "meals_breakdown": r.meals_breakdown if r.meals_breakdown is not None else None,  # ★ 追加
             }
             for r in rows
         ]
@@ -462,7 +491,6 @@ def upsert_goals_daily_bulk(user_id: str, rows: List[Dict]) -> Dict[str, int]:
 
     now = datetime.now(timezone.utc)
 
-    # insert句を変数に保持して excluded を安全に参照
     ins = pg_insert(UserGoalsDaily)
     values = [
         {
