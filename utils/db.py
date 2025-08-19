@@ -1,9 +1,9 @@
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from typing import List, Dict, Optional
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text, TIMESTAMP, Date, Numeric,
-    func, or_, and_, exists  # ★ 追加: and_, exists
+    func, or_, and_, exists
 )
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY, insert as pg_insert
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -558,24 +558,32 @@ def fetch_goals_range(user_id: str, start_d: date, end_d: date) -> List[Dict]:
         session.close()
 
 # =========================
-# ★ 有料会員一覧（自動判定）
+# ★ 有料会員検索（厳密版）
 # =========================
-def list_paid_users(q: str = "", limit: int = 50, offset: int = 0) -> List[Dict]:
+def search_paid_users(
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+    active_days: int = 0,
+    valid_only: bool = True
+) -> List[Dict]:
     """
-    定義:
+    定義（厳密）:
       - Calomeal連携済み（tokens に user_id がある）
-      - かつ以下のいずれか:
+      - valid_only=True の場合は token.expires_at > (UTC現在 - 5分) を有効扱い
+      - さらに以下のいずれか:
           a) requests.request_type = 'meal_feedback' の実績あり
           b) user_nutrition_daily に1件以上の保存あり
-    を「有料会員」とみなして返す。
+    返却: user_id, name, photo_url, last_contact, expires_at, last_intake_date, days_30
+    active_days>0 の場合、直近30日の記録日数(days_30) がその閾値以上のものに絞る
     """
     session = SessionLocal()
     try:
-        # EXISTS サブクエリ
-        tokens_exists = session.query(
-            exists().where(Token.user_id == UserProfile.user_id)
-        ).scalar_subquery()
+        # 現在時刻（Token.expires_at は naive 運用なので UTC naive を使用）
+        now_utc_naive = datetime.utcnow()
+        d30 = date.today() - timedelta(days=30)
 
+        # meal_feedback の実績があるか（EXISTS）
         meal_req_exists = session.query(
             exists().where(
                 and_(Request.user_id == UserProfile.user_id,
@@ -583,15 +591,30 @@ def list_paid_users(q: str = "", limit: int = 50, offset: int = 0) -> List[Dict]
             )
         ).scalar_subquery()
 
-        intake_exists = session.query(
-            exists().where(UserNutritionDaily.user_id == UserProfile.user_id)
-        ).scalar_subquery()
+        # ベースクエリ：Token で連携済みユーザーのみ（JOIN）
+        # Intake は集計のため LEFT JOIN
+        qry = (
+            session.query(
+                UserProfile.user_id,
+                UserProfile.name,
+                UserProfile.photo_url,
+                UserProfile.last_contact,
+                Token.expires_at.label("expires_at"),
+                func.max(UserNutritionDaily.date).label("last_intake_date"),
+                func.count().filter(UserNutritionDaily.date >= d30).label("days_30")
+            )
+            .join(Token, Token.user_id == UserProfile.user_id)  # 連携済み必須
+            .outerjoin(UserNutritionDaily, UserNutritionDaily.user_id == UserProfile.user_id)
+        )
 
-        qry = session.query(
-            UserProfile.user_id, UserProfile.name, UserProfile.photo_url,
-            UserProfile.last_contact, UserProfile.goals_json, UserProfile.tags
-        ).filter(and_(tokens_exists, or_(meal_req_exists, intake_exists)))
+        # トークン有効性フィルタ
+        if valid_only:
+            qry = qry.filter(Token.expires_at > (now_utc_naive - timedelta(minutes=5)))
 
+        # 利用実績（食事分析 or intake保存）フィルタ
+        qry = qry.filter(or_(meal_req_exists, UserNutritionDaily.user_id.isnot(None)))
+
+        # 検索
         _q = (q or "").strip()
         if _q:
             like = f"%{_q}%"
@@ -600,16 +623,47 @@ def list_paid_users(q: str = "", limit: int = 50, offset: int = 0) -> List[Dict]
                 func.lower(UserProfile.user_id).like(func.lower(like)),
             ))
 
-        rows = qry.order_by(UserProfile.name.asc()).limit(limit).offset(offset).all()
-        return [
-            {
+        # 集計
+        qry = qry.group_by(
+            UserProfile.user_id, UserProfile.name, UserProfile.photo_url, UserProfile.last_contact, Token.expires_at
+        )
+
+        # アクティブ閾値（直近30日の記録日数）
+        if isinstance(active_days, int) and active_days > 0:
+            qry = qry.having(func.count().filter(UserNutritionDaily.date >= d30) >= active_days)
+
+        # 並び順：最終摂取日 desc, 名前 asc
+        qry = qry.order_by(
+            func.max(UserNutritionDaily.date).desc().nullslast(),
+            UserProfile.name.asc()
+        ).limit(limit).offset(offset)
+
+        rows = qry.all()
+        out: List[Dict] = []
+        for r in rows:
+            expires_at = r.expires_at
+            # expires_at は naive TIMESTAMP 前提。文字列化のみ行う。
+            expires_str = expires_at.isoformat() if isinstance(expires_at, datetime) else (str(expires_at) if expires_at else None)
+            last_intake_date = r.last_intake_date.isoformat() if isinstance(r.last_intake_date, date) else None
+            out.append({
                 "user_id": r.user_id,
                 "name": r.name,
                 "photo_url": r.photo_url,
                 "last_contact": r.last_contact.isoformat() if r.last_contact else None,
-                "goals_json": r.goals_json,
-                "tags": r.tags,
-            } for r in rows
-        ]
+                "expires_at": expires_str,
+                "last_intake_date": last_intake_date,
+                "days_30": int(r.days_30 or 0),
+            })
+        return out
     finally:
         session.close()
+
+# =========================
+# ★ 有料会員一覧（互換ラッパ：従来呼び出し）
+# =========================
+def list_paid_users(q: str = "", limit: int = 50, offset: int = 0) -> List[Dict]:
+    """
+    互換用ラッパ。従来の list_paid_users を呼んでいた箇所から使えるように
+    厳密版 search_paid_users のデフォルト設定をそのまま適用。
+    """
+    return search_paid_users(q=q, limit=limit, offset=offset, active_days=0, valid_only=True)

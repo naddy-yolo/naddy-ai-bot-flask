@@ -26,7 +26,8 @@ from utils.db import (
     upsert_goals_daily_bulk,
     fetch_goals_range,
     set_user_goals_json,
-    list_paid_users,            # ★ 追加：有料会員一覧
+    list_paid_users,            # 互換：簡易ラッパ
+    search_paid_users,          # ★ 追加：厳密版（expires_at / days_30 / last_intake_date など）
 )
 from utils.gpt_utils import (
     classify_request_type,
@@ -138,7 +139,7 @@ def _extract_nutrition_for_day(meal_data, yyyy_mm_dd: str):
                         kcal = _to_float(sums.get("calorie") or sums.get("kcal") or sums.get("calories"))
                         p = _to_float(sums.get("protein") or sums.get("p") or sums.get("protein_g"))
                         f = _to_float(sums.get("fat") or sums.get("lipid") or sums.get("f") or sums.get("fat_g"))
-                        c = _to_float(sums.get("carbohydrate") or s.get("carb") or s.get("c") or s.get("carbohydrate_g"))
+                        c = _to_float(sums.get("carbohydrate") or sums.get("carb") or sums.get("c") or sums.get("carbohydrate_g"))
                         return kcal, p, f, c
 
     # 既存の A/B/C
@@ -644,7 +645,26 @@ def api_users():
     return jsonify({"data": rows}), 200
 
 # ---------------------------
-# ★ /paid-users  ← 新規（有料会員リスト）
+# ★ /users/premium  ← 新規（厳密：有料会員リスト）
+# ---------------------------
+@app.route("/users/premium", methods=["GET"])
+def api_users_premium():
+    auth = _require_admin()
+    if auth:
+        return auth
+    q = (request.args.get("q") or "").strip()
+    try:
+        limit = int(request.args.get("limit", 50))
+        offset = int(request.args.get("offset", 0))
+        active_days = int(request.args.get("active_days", 0))  # 直近30日の記録日数の下限
+    except Exception:
+        limit, offset, active_days = 50, 0, 0
+    valid_only = (request.args.get("valid_only", "true").lower() != "false")
+    rows = search_paid_users(q=q, limit=limit, offset=offset, active_days=active_days, valid_only=valid_only)
+    return jsonify({"data": rows}), 200
+
+# ---------------------------
+# ★ /paid-users  ← 互換（従来の簡易版を厳密版に付け替え）
 # ---------------------------
 @app.route("/paid-users", methods=["GET"])
 def api_paid_users():
@@ -657,7 +677,8 @@ def api_paid_users():
         offset = int(request.args.get("offset", 0))
     except Exception:
         limit, offset = 50, 0
-    rows = list_paid_users(q=q, limit=limit, offset=offset)
+    # 互換用だが内部は厳密版で返す（active_days=0, valid_only=True デフォルト）
+    rows = search_paid_users(q=q, limit=limit, offset=offset, active_days=0, valid_only=True)
     return jsonify({"data": rows}), 200
 
 # ---------------------------
