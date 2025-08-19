@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, jsonify, request
 import requests
 import os
@@ -27,6 +26,7 @@ from utils.db import (
     upsert_goals_daily_bulk,
     fetch_goals_range,
     set_user_goals_json,
+    list_paid_users,            # ★ 追加：有料会員一覧
 )
 from utils.gpt_utils import (
     classify_request_type,
@@ -138,7 +138,7 @@ def _extract_nutrition_for_day(meal_data, yyyy_mm_dd: str):
                         kcal = _to_float(sums.get("calorie") or sums.get("kcal") or sums.get("calories"))
                         p = _to_float(sums.get("protein") or sums.get("p") or sums.get("protein_g"))
                         f = _to_float(sums.get("fat") or sums.get("lipid") or sums.get("f") or sums.get("fat_g"))
-                        c = _to_float(sums.get("carbohydrate") or sums.get("carb") or sums.get("c") or sums.get("carbohydrate_g"))
+                        c = _to_float(sums.get("carbohydrate") or s.get("carb") or s.get("c") or s.get("carbohydrate_g"))
                         return kcal, p, f, c
 
     # 既存の A/B/C
@@ -641,6 +641,23 @@ def api_users():
     except Exception:
         limit, offset = 20, 0
     rows = search_users(q=q, limit=limit, offset=offset)
+    return jsonify({"data": rows}), 200
+
+# ---------------------------
+# ★ /paid-users  ← 新規（有料会員リスト）
+# ---------------------------
+@app.route("/paid-users", methods=["GET"])
+def api_paid_users():
+    auth = _require_admin()
+    if auth:
+        return auth
+    q = (request.args.get("q") or "").strip()
+    try:
+        limit = int(request.args.get("limit", 50))
+        offset = int(request.args.get("offset", 0))
+    except Exception:
+        limit, offset = 50, 0
+    rows = list_paid_users(q=q, limit=limit, offset=offset)
     return jsonify({"data": rows}), 200
 
 # ---------------------------

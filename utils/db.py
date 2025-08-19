@@ -1,8 +1,10 @@
-# utils/db.py
 from datetime import datetime, timezone, date
 from typing import List, Dict, Optional
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, TIMESTAMP, Date, Numeric, func, or_
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Text, TIMESTAMP, Date, Numeric,
+    func, or_, and_, exists  # ★ 追加: and_, exists
+)
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY, insert as pg_insert
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -83,7 +85,7 @@ class UserNutritionDaily(Base):
     protein_g     = Column(Numeric(6, 1))
     fat_g         = Column(Numeric(6, 1))
     carb_g        = Column(Numeric(6, 1))
-    meals_breakdown = Column(JSONB, nullable=True)   # ★ 追加
+    meals_breakdown = Column(JSONB, nullable=True)
     created_at    = Column(TIMESTAMP(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at    = Column(TIMESTAMP(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
@@ -472,7 +474,7 @@ def get_user_intake(user_id: str, start: date, end: date) -> List[Dict]:
                 "protein_g": to_float(r.protein_g),
                 "fat_g": to_float(r.fat_g),
                 "carb_g": to_float(r.carb_g),
-                "meals_breakdown": r.meals_breakdown if r.meals_breakdown is not None else None,  # ★ 追加
+                "meals_breakdown": r.meals_breakdown if r.meals_breakdown is not None else None,
             }
             for r in rows
         ]
@@ -551,6 +553,63 @@ def fetch_goals_range(user_id: str, start_d: date, end_d: date) -> List[Dict]:
                 "c": to_float(r.c),
             }
             for r in rows
+        ]
+    finally:
+        session.close()
+
+# =========================
+# ★ 有料会員一覧（自動判定）
+# =========================
+def list_paid_users(q: str = "", limit: int = 50, offset: int = 0) -> List[Dict]:
+    """
+    定義:
+      - Calomeal連携済み（tokens に user_id がある）
+      - かつ以下のいずれか:
+          a) requests.request_type = 'meal_feedback' の実績あり
+          b) user_nutrition_daily に1件以上の保存あり
+    を「有料会員」とみなして返す。
+    """
+    session = SessionLocal()
+    try:
+        # EXISTS サブクエリ
+        tokens_exists = session.query(
+            exists().where(Token.user_id == UserProfile.user_id)
+        ).scalar_subquery()
+
+        meal_req_exists = session.query(
+            exists().where(
+                and_(Request.user_id == UserProfile.user_id,
+                     Request.request_type == "meal_feedback")
+            )
+        ).scalar_subquery()
+
+        intake_exists = session.query(
+            exists().where(UserNutritionDaily.user_id == UserProfile.user_id)
+        ).scalar_subquery()
+
+        qry = session.query(
+            UserProfile.user_id, UserProfile.name, UserProfile.photo_url,
+            UserProfile.last_contact, UserProfile.goals_json, UserProfile.tags
+        ).filter(and_(tokens_exists, or_(meal_req_exists, intake_exists)))
+
+        _q = (q or "").strip()
+        if _q:
+            like = f"%{_q}%"
+            qry = qry.filter(or_(
+                func.lower(UserProfile.name).like(func.lower(like)),
+                func.lower(UserProfile.user_id).like(func.lower(like)),
+            ))
+
+        rows = qry.order_by(UserProfile.name.asc()).limit(limit).offset(offset).all()
+        return [
+            {
+                "user_id": r.user_id,
+                "name": r.name,
+                "photo_url": r.photo_url,
+                "last_contact": r.last_contact.isoformat() if r.last_contact else None,
+                "goals_json": r.goals_json,
+                "tags": r.tags,
+            } for r in rows
         ]
     finally:
         session.close()
