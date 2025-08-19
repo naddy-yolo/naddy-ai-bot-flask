@@ -558,6 +558,75 @@ def fetch_goals_range(user_id: str, start_d: date, end_d: date) -> List[Dict]:
         session.close()
 
 # =========================
+# ★ coaching 情報の保存/取得
+# =========================
+def set_user_coaching(user_id: str, coaching: Dict) -> None:
+    """
+    goals_json.coaching をマージ更新する。
+    受け取るフィールド例:
+      {
+        "start": "YYYY-MM-DD",
+        "end": "YYYY-MM-DD",
+        "target_weight": 55.0,   # 数値/文字列どちらでも可
+        "course_term": "3ヶ月"   # 自由形式（例: "8週間" でもOK）
+      }
+    既存の goals_json は保持し、coaching の重複キーのみ上書き。
+    """
+    if not user_id:
+        return
+    ses = SessionLocal()
+    try:
+        row = ses.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        now = datetime.now(timezone.utc)
+        if not row:
+            # ユーザーが未登録でも作成できるように UPSERT
+            base = {"coaching": coaching or {}}
+            stmt = pg_insert(UserProfile).values(
+                user_id=user_id,
+                name=user_id,
+                goals_json=base,
+                created_at=now,
+                updated_at=now,
+            ).on_conflict_do_update(
+                index_elements=[UserProfile.user_id],
+                set_={
+                    "goals_json": base,
+                    "updated_at": now,
+                }
+            )
+            ses.execute(stmt)
+            ses.commit()
+            return
+
+        gj = row.goals_json if isinstance(row.goals_json, dict) else {}
+        cur = gj.get("coaching", {}) if isinstance(gj.get("coaching"), dict) else {}
+        # マージ（右優先）
+        merged = {**cur, **(coaching or {})}
+        gj["coaching"] = merged
+        row.goals_json = gj
+        row.updated_at = now
+        ses.commit()
+    finally:
+        ses.close()
+
+def get_user_coaching(user_id: str) -> Optional[Dict]:
+    """
+    goals_json.coaching を返す（存在しなければ {} を返す）。
+    """
+    if not user_id:
+        return None
+    ses = SessionLocal()
+    try:
+        row = ses.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if not row:
+            return None
+        gj = row.goals_json if isinstance(row.goals_json, dict) else {}
+        coaching = gj.get("coaching", {}) if isinstance(gj.get("coaching"), dict) else {}
+        return coaching
+    finally:
+        ses.close()
+
+# =========================
 # ★ 有料会員検索（厳密版）
 # =========================
 def search_paid_users(

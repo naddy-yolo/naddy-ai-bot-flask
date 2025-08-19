@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 import requests
 import os
 from datetime import datetime, timezone, timedelta, date as date_cls
+from copy import deepcopy
 
 from sqlalchemy import text  # JOIN付き生SQLやUPSERTで使用
 
@@ -27,8 +28,9 @@ from utils.db import (
     fetch_goals_range,
     set_user_goals_json,
     list_paid_users,            # 互換：簡易ラッパ
-    search_paid_users,          # ★ 追加：厳密版（expires_at / days_30 / last_intake_date など）
+    search_paid_users,          # ★ 厳密版（expires_at / days_30 / last_intake_date など）
 )
+
 from utils.gpt_utils import (
     classify_request_type,
     generate_meal_advice,
@@ -645,7 +647,7 @@ def api_users():
     return jsonify({"data": rows}), 200
 
 # ---------------------------
-# ★ /users/premium  ← 新規（厳密：有料会員リスト）
+# ★ /users/premium  ← 厳密：有料会員リスト
 # ---------------------------
 @app.route("/users/premium", methods=["GET"])
 def api_users_premium():
@@ -664,7 +666,7 @@ def api_users_premium():
     return jsonify({"data": rows}), 200
 
 # ---------------------------
-# ★ /paid-users  ← 互換（従来の簡易版を厳密版に付け替え）
+# ★ /paid-users  ← 互換（内部は厳密版で返す）
 # ---------------------------
 @app.route("/paid-users", methods=["GET"])
 def api_paid_users():
@@ -677,7 +679,6 @@ def api_paid_users():
         offset = int(request.args.get("offset", 0))
     except Exception:
         limit, offset = 50, 0
-    # 互換用だが内部は厳密版で返す（active_days=0, valid_only=True デフォルト）
     rows = search_paid_users(q=q, limit=limit, offset=offset, active_days=0, valid_only=True)
     return jsonify({"data": rows}), 200
 
@@ -696,6 +697,84 @@ def api_user_profile():
     if not row:
         return jsonify({"error": "not_found"}), 404
     return jsonify({"data": row}), 200
+
+# ---------------------------
+# ★ NEW: /user/coaching（開始・終了・目標体重・コース期間を保存）
+# ---------------------------
+@app.route("/user/coaching", methods=["POST"])
+def api_user_coaching():
+    auth = _require_admin()
+    if auth:
+        return auth
+    try:
+        payload = request.get_json(force=True) or {}
+        uid = (payload.get("user_id") or "").strip()
+        if not uid:
+            return jsonify({"status": "error", "message": "user_id is required"}), 400
+
+        start = payload.get("start")  # "YYYY-MM-DD" or None
+        end = payload.get("end")      # "YYYY-MM-DD" or None
+        target_weight = payload.get("target_weight")
+        course_period = payload.get("course_period")  # e.g. "3ヶ月", "8週間", etc.
+
+        # 入力バリデーション/正規化
+        def _norm_date_or_none(v):
+            if v in (None, "", "null"):
+                return None
+            try:
+                return datetime.fromisoformat(str(v)[:10]).date().isoformat()
+            except Exception:
+                return None
+
+        start_iso = _norm_date_or_none(start)
+        end_iso = _norm_date_or_none(end)
+
+        def _to_float_or_none(v):
+            try:
+                if v in (None, "", "null"):
+                    return None
+                return float(v)
+            except Exception:
+                return None
+
+        target_w = _to_float_or_none(target_weight)
+        course_p = (course_period or "").strip() or None
+
+        # 既存goals_jsonを取得しマージ
+        prof = get_user_profile_one(uid) or {}
+        base_goals = deepcopy(prof.get("goals_json") or {})
+        if not isinstance(base_goals, dict):
+            base_goals = {}
+
+        # coachingノード確保
+        coaching = base_goals.get("coaching")
+        if not isinstance(coaching, dict):
+            coaching = {}
+        if start_iso is not None:
+            coaching["start"] = start_iso
+        if end_iso is not None:
+            coaching["end"] = end_iso
+        base_goals["coaching"] = coaching
+
+        # target_weight / course_period はルート直下に
+        if target_w is not None:
+            base_goals["target_weight"] = target_w
+        if course_p is not None:
+            base_goals["course_period"] = course_p
+
+        # 監査情報
+        base_goals["last_manual_update"] = {
+            "section": "coaching",
+            "at": datetime.now(timezone.utc).isoformat()
+        }
+
+        # 保存
+        set_user_goals_json(uid, base_goals)
+
+        return jsonify({"status": "ok", "user_id": uid, "goals_json": base_goals}), 200
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # ---------------------------
 # ★ /user/weights
