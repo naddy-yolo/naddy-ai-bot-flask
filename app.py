@@ -140,7 +140,7 @@ def _extract_nutrition_for_day(meal_data, yyyy_mm_dd: str):
                         sums = (item.get("meal_histories_summary") or {}).get("all") or {}
                         kcal = _to_float(sums.get("calorie") or sums.get("kcal") or sums.get("calories"))
                         p = _to_float(sums.get("protein") or sums.get("p") or sums.get("protein_g"))
-                        f = _to_float(sums.get("fat") or sums.get("lipid") or sums.get("f") or sums.get("fat_g"))
+                        f = _to_float(sums.get("fat") or sums.get("fat_g") or sums.get("lipid") or sums.get("f"))
                         c = _to_float(sums.get("carbohydrate") or sums.get("carb") or sums.get("c") or sums.get("carbohydrate_g"))
                         return kcal, p, f, c
 
@@ -699,7 +699,7 @@ def api_user_profile():
     return jsonify({"data": row}), 200
 
 # ---------------------------
-# ★ NEW: /user/coaching（開始・終了・目標体重・コース期間を保存）
+# ★ NEW: /user/coaching（開始・終了・目標体重・コース期間＋新規欄を保存）
 # ---------------------------
 @app.route("/user/coaching", methods=["POST"])
 def api_user_coaching():
@@ -712,12 +712,19 @@ def api_user_coaching():
         if not uid:
             return jsonify({"status": "error", "message": "user_id is required"}), 400
 
+        # 既存フィールド
         start = payload.get("start")  # "YYYY-MM-DD" or None
         end = payload.get("end")      # "YYYY-MM-DD" or None
         target_weight = payload.get("target_weight")
-        course_period = payload.get("course_period")  # e.g. "3ヶ月", "8週間", etc.
+        course_period = payload.get("course_period")  # e.g. "60d", "3ヶ月" など
 
-        # 入力バリデーション/正規化
+        # 追加フィールド（今回の拡張）
+        height_cm = payload.get("height_cm")          # float 期待
+        birth_date = payload.get("birth_date")        # "YYYY-MM-DD"
+        start_weight = payload.get("start_weight")    # float 期待
+        personal_note = payload.get("personal_note")  # str → coaching.notes
+
+        # ---- 正規化ヘルパ ----
         def _norm_date_or_none(v):
             if v in (None, "", "null"):
                 return None
@@ -725,9 +732,6 @@ def api_user_coaching():
                 return datetime.fromisoformat(str(v)[:10]).date().isoformat()
             except Exception:
                 return None
-
-        start_iso = _norm_date_or_none(start)
-        end_iso = _norm_date_or_none(end)
 
         def _to_float_or_none(v):
             try:
@@ -737,16 +741,24 @@ def api_user_coaching():
             except Exception:
                 return None
 
+        start_iso = _norm_date_or_none(start)
+        end_iso = _norm_date_or_none(end)
+
         target_w = _to_float_or_none(target_weight)
         course_p = (course_period or "").strip() or None
 
-        # 既存goals_jsonを取得しマージ
+        h_cm = _to_float_or_none(height_cm)
+        bday_iso = _norm_date_or_none(birth_date)
+        s_w = _to_float_or_none(start_weight)
+        note = (personal_note or "").strip() if isinstance(personal_note, str) else None
+
+        # ---- 既存goals_jsonを取得しマージ ----
         prof = get_user_profile_one(uid) or {}
         base_goals = deepcopy(prof.get("goals_json") or {})
         if not isinstance(base_goals, dict):
             base_goals = {}
 
-        # coachingノード確保
+        # coachingノード確保（開始/終了）
         coaching = base_goals.get("coaching")
         if not isinstance(coaching, dict):
             coaching = {}
@@ -754,13 +766,24 @@ def api_user_coaching():
             coaching["start"] = start_iso
         if end_iso is not None:
             coaching["end"] = end_iso
+
+        # coaching.notes（個別メモ）
+        if note is not None:
+            coaching["notes"] = note
+
         base_goals["coaching"] = coaching
 
-        # target_weight / course_period はルート直下に
+        # ルート直下に保存（目標体重・コース期間・身長・生年月日・スタート体重）
         if target_w is not None:
             base_goals["target_weight"] = target_w
         if course_p is not None:
             base_goals["course_period"] = course_p
+        if h_cm is not None:
+            base_goals["height_cm"] = h_cm
+        if bday_iso is not None:
+            base_goals["birth_date"] = bday_iso
+        if s_w is not None:
+            base_goals["start_weight"] = s_w
 
         # 監査情報
         base_goals["last_manual_update"] = {
